@@ -1,217 +1,262 @@
-# Dance Rhythm Game MVP Design
+# fullydancy MVP 产品设计
 
-## Summary
+## 产品定义
 
-The product is a personal web-based dance rhythm practice game. A user uploads a dance video, the system quickly turns it into a playable challenge, and the user dances in front of a computer webcam while receiving real-time rhythm and pose feedback.
+fullydancy 是一个 Web 端个人舞蹈音游。用户上传一段卡点鲜明的舞蹈视频，系统自动识别音乐强拍，用户为少量拍点添加“打开”或“蹲低”要求；完成身体校准后，即可通过摄像头挑战节奏准确度和动作完成度，在短促、有冲击力的实时反馈中，把动作跳得更开、更准、更有劲。
 
-The first version prioritizes fun, repeatable practice over professional-grade dance coaching. Its core promise is:
+产品不限定舞种，但更适合音乐卡点明确、动作幅度清晰的视频。
 
-> Upload a dance video, generate a challenge, dance with strong game feedback, review your result, and try again.
+## 目标用户
 
-## Target User
+首版面向有少量翻跳经验、能够自行学会一段舞的爱好者。他们习惯独自对着视频练习，希望改善动作缩水、下蹲不足和卡点不利落的问题，同时获得接近音游或舞蹈机的爽感。
 
-The first version serves dance enthusiasts who practice alone by following videos. They are not creating public courses or social challenges. They want a faster, more motivating way to practice framework, pose timing, and crispness while dancing in front of a computer screen.
+fullydancy 不负责教会一段舞，也不评判用户是否还原了原视频。它评价的是用户自己设置的动作意图是否在音乐强拍上完成。
 
-## Product Positioning
+## 产品原则
 
-This is a personal dance rhythm game, not a creator marketplace, teacher platform, or professional judging system.
+- 节奏是玩法主干，框架判定只出现在少量拍点。
+- 奖励正确动作的强度高于批评错误动作的强度。
+- 实时提示必须短促，不用长篇纠错打断舞蹈。
+- 使用相对身体比例，不使用屏幕绝对坐标判断动作。
+- 系统只判断它能够可靠判断的内容。
+- 摄像头看不清时不把技术失败算作用户错误。
+- 产品只定义体验和规则，不设置成功门槛、观察指标、用户任务或数据目标。
 
-The experience should feel closer to a computer-based dance arcade or rhythm game than a homework correction tool. Professional feedback exists, but it supports the game loop rather than dominating it.
+## 核心流程
 
-## Core User Loop
+1. 用户上传 15–60 秒的本地舞蹈视频。
+2. 系统分析音乐并标出强拍。
+3. 用户试听和预览强拍，保留纯节奏点，或给少量拍点添加“打开”或“蹲低”要求。
+4. 用户完成全身入镜、打开幅度和挑战下蹲深度校准。
+5. 用户开始挑战，系统同步播放视频、音乐并读取摄像头姿态。
+6. 系统实时反馈节奏、动作命中、Combo 和能量。
+7. 挑战结束后展示战绩卡，用户可以一键再来一局。
 
-1. Upload a dance video.
-2. The system detects beats, motion changes, and candidate key poses.
-3. The user confirms a small set of key checkpoints.
-4. The user completes a short body and camera calibration.
-5. The user starts the challenge.
-6. The app gives strong real-time feedback for timing, combo, energy, and key pose hits.
-7. The app shows a post-run result card with score, best sections, and weak sections.
-8. The user retries the full challenge or loops a weak section.
+## 关卡生成与编辑
 
-## MVP Scope
+### 自动生成的职责
 
-### Included
+系统只自动识别音乐强拍，不自动识别原视频中的动作、姿势、运动变化点或动作语义。
 
-- Local video upload.
-- Automatic beat and checkpoint generation.
-- Simple checkpoint confirmation.
-- Webcam-based full-body practice.
-- Short body and camera calibration.
-- Real-time timing feedback.
-- Real-time key pose feedback.
-- Combo, energy, fever, and high-impact visual feedback.
-- Post-run result card.
-- One-click retry.
-- Weak-section loop practice.
+系统应优先保留较突出的强拍，避免把每一拍都变成判定点。自动结果是一个可快速确认的初始谱面，而不是完整编舞分析。
 
-### Not Included
+### 卡点结构
 
-- Public sharing.
-- Leaderboards.
-- Multiplayer or live competition.
-- Teacher course marketplace.
-- Professional frame-by-frame judging.
-- Complex manual chart editing.
-- Detailed support for all dance styles.
-- Fine judging of hands, feet, facial expression, or texture.
+每个被保留的强拍都默认进行“快速到位”判定。“打开”和“蹲低”是附加在强拍上的动作要求，不是与节奏平级的另一套时间点。
 
-## Challenge Generation
-
-After a user uploads a video, the system generates a playable challenge that is good enough to start quickly. It does not need to produce a perfect chart.
-
-The generator should prioritize:
-
-- Strong music beats.
-- Visible pose holds.
-- Arm extension peaks.
-- Squat or low-center moments.
-- Direction changes.
-- Turn or torso-angle changes.
-- End points of fast contraction or release movements.
-
-The app should present generated checkpoints as lightweight confirmations. The user should not edit angles, coordinates, or thresholds directly.
-
-Example labels:
-
-- Arm open.
-- Squat low.
-- Hold the pose.
-- Hit fast.
-- Turn body.
-- Lock frame.
-
-## Checkpoint Model
-
-Each checkpoint describes the dance intent, not a fixed screen coordinate.
-
-Minimum checkpoint fields:
-
-- `time`: target timestamp in the uploaded video.
-- `beat`: optional beat index if beat tracking is available.
-- `label`: user-facing checkpoint label.
-- `bodyTargets`: relevant body areas, such as arms, shoulders, hips, knees, or center of mass.
-- `intent`: movement goal, such as extension, squat, hold, turn, or fast arrival.
-- `timingWindowMs`: acceptable hit window.
-- `strictness`: loose, standard, or strict.
-- `feedback`: success and miss feedback text or visual effect.
-
-Example:
-
-```json
-{
-  "time": 18.4,
-  "beat": 32,
-  "label": "Arm open",
-  "bodyTargets": ["rightArm", "shoulders"],
-  "intent": "extension",
-  "timingWindowMs": 120,
-  "strictness": "standard",
-  "feedback": {
-    "hit": "Pose Lock",
-    "miss": "Arm not open"
-  }
-}
+```text
+强拍卡点
+├─ 基础判定：快速到位
+└─ 可选动作要求
+   ├─ 打开放大
+   └─ 蹲低压重心
 ```
 
-## Body Calibration
+用户可以对每个强拍执行四种操作：
 
-The product must not judge by absolute screen position. Height, arm length, camera angle, and distance from the computer all affect raw coordinates.
+- 只卡节奏：仅判断快速到位。
+- 打开：判断快速到位，并检查伸展幅度。
+- 蹲低：判断快速到位，并检查重心下降幅度。
+- 删除：不在这个强拍进行判定。
 
-Before the first challenge, the user completes a short 10-20 second calibration:
+首版同一个强拍最多添加一个动作要求，避免同一时刻出现多项动作错误。
 
-1. Stand fully in frame.
-2. Hold a neutral standing pose.
-3. Open both arms.
-4. Perform a natural squat.
-5. Return to standing.
+用户选择“打开”或“蹲低”，表达的是“我希望自己在这个强拍完成该动作目标”，并不表示系统识别出了原视频中的动作。关卡确认界面必须明确说明这一点。
 
-The calibration estimates:
+### 卡点数据模型
 
-- Body scale in camera frame.
-- Shoulder width.
-- Approximate arm span.
-- Standing hip height.
-- Natural squat depth.
-- Camera framing quality.
-- Whether the full body is visible.
+每个卡点至少包含：
 
-The app should show clear blocking guidance only when needed, such as when the user is partially out of frame or too close to the camera.
+- `timeSec`：目标强拍的时间。
+- `beatIndex`：强拍序号。
+- `action`：`rhythm`、`open` 或 `squat`。
+- `enabled`：是否保留该卡点。
+- `timingWindowsMs`：各节奏评价的时间窗口。
 
-## Relative Judging
+卡点不保存原舞姿势、屏幕坐标或需要用户编辑的身体角度。
 
-Pose checks use relative body measurements rather than screen coordinates.
+## 身体与摄像头校准
 
-Examples:
+校准用于建立用户自己的动作尺度，并确认摄像头具备判定条件。
 
-- Arm extension checks wrist-to-shoulder distance, elbow angle, and shoulder alignment relative to the user's calibrated body.
-- Squat depth checks hip height relative to the user's standing hip height and natural squat range.
-- Frame openness checks shoulder, elbow, wrist, and hip angles.
-- Body tilt checks shoulder line, hip line, and torso axis.
-- Pose timing checks when the target pose appears relative to the beat or checkpoint timestamp.
+### 校准流程
 
-This makes the challenge more fair across different bodies and room setups.
+1. 全身入镜并自然站立。
+2. 主动将双臂完全打开。
+3. 主动完成一次挑战下蹲。
+4. 返回站立状态。
 
-## Real-Time Challenge Feedback
+### 记录内容
 
-The challenge screen should provide strong, immediate feedback without overwhelming the dancer.
+- 身体在画面中的相对尺度。
+- 肩宽和近似臂展。
+- 站立时的髋部高度。
+- 用户主动打开时的伸展幅度。
+- 用户主动完成的挑战下蹲深度。
+- 关键身体点的可见度。
+- 全身是否入镜以及机位是否可用。
 
-Primary real-time elements:
+系统只记录用户主动完成的挑战下蹲深度作为后续标准，不记录“自然下蹲深度”或另设舒适深度。
 
-- Timing judgment: Perfect, Great, Early, Late, Miss.
-- Combo count.
-- Energy or fever meter.
-- Pose Lock feedback for framework checkpoints.
-- Short miss prompts, such as "late", "arm not open", or "go lower".
-- Stage-like visual effects on strong hits.
+## 判定规则
 
-Real-time feedback must be short and visceral. It should reward good moments more loudly than it criticizes bad moments.
+### 快速到位
 
-## Post-Run Review
+产品不比较用户与原视频的姿势。快速到位被定义为：用户身体的整体运动在强拍附近明显收束，形成清晰的动作落点。
 
-After a challenge, the app shows a result card focused on replay motivation.
+系统观察强拍前后的身体运动速度：
 
-The result card includes:
+- 强拍前存在明显运动。
+- 强拍附近速度快速下降，或运动方向发生明显切换。
+- 系统将检测到的动作落点与音乐强拍比较时间差。
 
-- Grade: S, A, B, or C.
-- Total score.
-- Highest combo.
-- Timing accuracy.
-- Framework hit rate.
-- Best 8-count section.
-- Weakest 8-count section.
-- Retry full challenge.
-- Practice weak section.
+首版默认时间窗口：
 
-The review should avoid long coaching essays. It should help the user decide what to try next.
+- `Perfect`：±100ms。
+- `Great`：±200ms。
+- `Early` 或 `Late`：±350ms。
+- `Miss`：超过 ±350ms，或没有检测到明确落点。
 
-## UX Principles
+阈值应可在实现层调整。挑战开始前应进行设备延迟补偿，降低浏览器、摄像头和姿态识别延迟对结果的影响。
 
-- Start playing quickly.
-- Keep editing lightweight.
-- Make correct movement feel exciting.
-- Use short feedback during dancing.
-- Save detailed analysis for after the run.
-- Prefer personal progress over public comparison.
-- Treat judging as adaptive, not absolute.
+### 打开放大
 
-## First Release Success Criteria
+系统基于用户校准结果检查：
 
-The MVP is successful if a user can:
+- 手腕到肩部的相对距离。
+- 肘部伸展程度。
+- 双臂整体展开宽度。
+- 身体在画面中的相对尺度。
 
-- Upload a dance video and generate a playable challenge within a few minutes.
-- Complete webcam calibration without expert help.
-- Dance a challenge with visible real-time rhythm and pose feedback.
-- Understand whether they were early, late, or off-frame on key moments.
-- See a result card that motivates one more attempt.
-- Retry the full challenge or practice a weak section immediately.
+挑战时达到校准打开幅度的约 85% 即可命中。该比例是首版默认值，应可调整。
 
-## Open Product Decisions
+实时反馈：
 
-The approved first version intentionally leaves these questions for later:
+- 命中：`FULL OUT`。
+- 未命中：`再打开`。
 
-- Which pose-estimation model should power the webcam pipeline.
-- Whether beat detection runs entirely in browser or with a backend service.
-- How saved challenges are stored.
-- Whether future versions support sharing or creator-made public challenges.
-- Which dance style receives the first optimized feedback presets.
+### 蹲低压重心
+
+系统比较站立髋部高度与挑战时髋部高度，计算下降幅度相对于校准挑战下蹲深度的比例。
+
+挑战时达到校准下降幅度的约 85% 即可命中。该判定只评价重心下降，不评价膝盖方向、背部姿态或专业深蹲技术。
+
+实时反馈：
+
+- 命中：`DROP LOW`。
+- 未命中：`再低一点`。
+
+### 识别失败
+
+手臂、髋部或其他所需关键点被遮挡、离开画面或置信度不足时：
+
+- 不把本次动作判为失败。
+- 不计入动作完成率的分母。
+- 给出“保持全身入镜”等机位提示。
+- 不因动作识别失败打断节奏 Combo。
+
+## 计分与 Combo
+
+总分由两部分组成：
+
+- 节奏准确率：70%。
+- 动作完成率：30%。
+
+具体分值映射应集中配置，避免散落在界面或判定代码中。
+
+Combo 只由节奏判定维持。打开或蹲低命中时提供额外分数、能量和视觉奖励；动作未命中时不给动作奖励，但不打断 Combo。
+
+这种设计使节奏始终是玩法主干，也降低摄像头偶发误判对核心爽感的破坏。
+
+## 实时反馈
+
+挑战界面的主要反馈包括：
+
+- `Perfect`、`Great`、`Early`、`Late`、`Miss`。
+- `FULL OUT` 和 `DROP LOW`。
+- Combo。
+- 能量或 Fever 表现。
+- 强命中时的震动感、粒子、光效和短音效。
+
+同一个强拍只显示一个主反馈：
+
+1. 节奏与动作都命中时，优先显示 `FULL OUT` 或 `DROP LOW`。
+2. 节奏命中但动作未完成时，主反馈显示节奏评价，旁边轻量提示“再打开”或“再低一点”。
+3. 节奏未命中时，显示 `Early`、`Late` 或 `Miss`。
+4. 姿态置信度不足时，显示机位提示，不显示动作错误。
+
+系统在同一时刻不报告多个动作错误。连续失误时应控制负面提示频率，避免反馈变成训话。
+
+## 战绩卡
+
+挑战结束后展示：
+
+- 总评级。
+- 总分。
+- 节奏准确率。
+- 动作完成率。
+- 最高 Combo。
+- 打开命中数。
+- 蹲低命中数。
+- 再来一局。
+
+首版不展示最佳八拍、最弱八拍或弱段循环，因为系统只识别强拍，没有可靠的乐句和八拍结构。
+
+## MVP 范围
+
+### 包含
+
+- 15–60 秒本地视频上传。
+- 音乐强拍自动识别。
+- 强拍试听、预览、标记与删除。
+- 只卡节奏、打开和蹲低三种有效卡点状态。
+- 全身入镜检查。
+- 主动最大打开校准。
+- 主动挑战下蹲校准。
+- 设备延迟补偿。
+- 摄像头人体姿态检测。
+- 实时节奏和动作反馈。
+- Combo、能量、Fever 和强视觉反馈。
+- 战绩卡与一键重新挑战。
+
+### 不包含
+
+- 舞种识别或舞种限制。
+- 自动识别原视频动作或动作语义。
+- 原舞还原度评分。
+- 定住、转身、律动、身体分离、手型、脚部细节或表情判定。
+- 自动识别八拍、乐句、最佳段落或最弱段落。
+- 弱段循环练习。
+- 录屏和视频导出。
+- 用肢体手势控制倍速、播放、开始或停止。
+- 复杂谱面编辑。
+- 公共分享、排行榜、多人模式或教学市场。
+- 专业逐帧动作纠错。
+- 成功门槛、观察信号、用户任务或数据目标。
+
+## 关键产品风险
+
+### 快速到位的含义可能不直观
+
+首次挑战前需要用简短动画解释：系统判断的是动作在强拍附近是否形成清晰落点，不判断是否与视频动作一致。
+
+### 连续流动动作可能没有明确落点
+
+产品不限制舞种，但应说明它更适合卡点强、动作幅度清晰的视频。若视频缺乏可用强拍，系统应如实提示，而不是生成密集或不可靠的卡点。
+
+### 自动强拍过密会增加编辑负担
+
+系统应默认选出较突出的强拍，让用户从可玩的初始结果开始，只为少量拍点补充动作要求。
+
+### 摄像头误判会破坏爽感
+
+判定阈值应偏向宽容。动作命中带来额外奖励，动作漏判不打断节奏 Combo；识别置信度不足时不判用户失败。
+
+## 待实现阶段决定的事项
+
+- 使用哪一种浏览器端人体姿态识别方案。
+- 强拍检测运行在浏览器端还是服务端。
+- 设备延迟补偿的具体交互与算法。
+- 本地视频、谱面和校准数据的保存方式。
+- 分数、评级、能量和 Fever 的具体数值曲线。
+- 强拍筛选数量与默认密度。
