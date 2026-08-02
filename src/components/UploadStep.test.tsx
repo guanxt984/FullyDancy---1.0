@@ -85,4 +85,15 @@ describe("UploadStep", () => {
     view.unmount();
     expect(fakes.releaseVideoAsset).toHaveBeenCalledWith(secondAsset);
   });
-});
+
+  it("releases an asset when its consumer callback throws", async () => {
+    const asset = fakeAsset("callback-failure.mp4");
+    const onAssetReady = vi.fn(() => { throw new Error("handoff failed"); });
+    fakes.createVideoAsset.mockResolvedValue(asset);
+    render(<UploadStep onAssetReady={onAssetReady} />);
+
+    fireEvent.change(screen.getByLabelText("\u9009\u62e9\u7ec3\u4e60\u89c6\u9891"), { target: { files: [asset.file] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("handoff failed");
+    expect(fakes.releaseVideoAsset).toHaveBeenCalledWith(asset);
+  });});

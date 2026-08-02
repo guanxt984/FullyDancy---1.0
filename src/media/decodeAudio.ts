@@ -18,15 +18,58 @@ export class MissingAudioTrackError extends Error {
   }
 }
 
+type StreamCaptureVideo = HTMLVideoElement & {
+  captureStream?: () => MediaStream;
+};
+
+function inspectLocalAudioTrack(file: File): Promise<boolean> {
+  if (typeof document === "undefined" || typeof URL.createObjectURL !== "function") {
+    return Promise.resolve(false);
+  }
+
+  const video = document.createElement("video") as StreamCaptureVideo;
+  if (typeof video.captureStream !== "function") return Promise.resolve(false);
+  const objectUrl = URL.createObjectURL(file);
+
+  return new Promise((resolve) => {
+    const cleanUp = () => {
+      video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("error", onError);
+      video.removeAttribute("src");
+      URL.revokeObjectURL(objectUrl);
+    };
+    const onLoadedMetadata = () => {
+      try {
+        const hasNoAudioTrack = video.captureStream?.().getAudioTracks().length === 0;
+        cleanUp();
+        resolve(hasNoAudioTrack);
+      } catch {
+        cleanUp();
+        resolve(false);
+      }
+    };
+    const onError = () => {
+      cleanUp();
+      resolve(false);
+    };
+
+    video.preload = "metadata";
+    video.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    video.src = objectUrl;
+  });
+}
+
 export async function decodeMonoPcm(
   file: File,
   context: Pick<BaseAudioContext, "decodeAudioData">,
 ): Promise<PcmAudio> {
+  if (await inspectLocalAudioTrack(file)) throw new MissingAudioTrackError();
+
   let decoded: AudioBuffer;
   try {
     decoded = await context.decodeAudioData(await file.arrayBuffer());
-  } catch (error) {
-    if (isNoAudioTrackDecodeFailure(error)) throw new MissingAudioTrackError();
+  } catch {
     throw new UnsupportedAudioFormatError();
   }
 
@@ -45,16 +88,4 @@ export async function decodeMonoPcm(
     sampleRate: decoded.sampleRate,
     durationSec: decoded.duration,
   };
-}
-export const NO_AUDIO_TRACK_ERROR_CODE = "NO_AUDIO_TRACK";
-
-export interface NoAudioTrackDecodeFailure {
-  code: typeof NO_AUDIO_TRACK_ERROR_CODE;
-}
-
-function isNoAudioTrackDecodeFailure(error: unknown): error is NoAudioTrackDecodeFailure {
-  return typeof error === "object"
-    && error !== null
-    && "code" in error
-    && error.code === NO_AUDIO_TRACK_ERROR_CODE;
 }

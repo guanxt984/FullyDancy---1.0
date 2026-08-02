@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import "../test/urlObjectUrl";
 import { decodeMonoPcm } from "./decodeAudio";
 
 function fakeFile(): File {
@@ -43,10 +44,22 @@ describe("decodeMonoPcm", () => {
       .rejects.toThrow("不支持该视频的音频格式");
   });
 
-  it("preserves the decoder's no-audio-track result", async () => {
-    const noAudioTrack = Object.assign(new Error("no audio track"), { code: "NO_AUDIO_TRACK" });
+  it("reports a missing audio track from the local media preflight", async () => {
+    const video = document.createElement("video");
+    Object.defineProperty(video, "captureStream", {
+      value: () => ({ getAudioTracks: () => [] }),
+    });
+    const createElement = vi.spyOn(document, "createElement").mockImplementation((tagName) => (
+      tagName === "video" ? video : document.createElement(tagName)
+    ));
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:no-audio");
+    const decodeAudioData = vi.fn();
 
-    await expect(decodeMonoPcm(fakeFile(), fakeContext(noAudioTrack)))
-      .rejects.toThrow("视频没有可用音轨");
+    const result = decodeMonoPcm(fakeFile(), { decodeAudioData });
+    video.dispatchEvent(new Event("loadedmetadata"));
+
+    await expect(result).rejects.toThrow("视频没有可用音轨");
+    expect(decodeAudioData).not.toHaveBeenCalled();
+    createElement.mockRestore();
   });
 });

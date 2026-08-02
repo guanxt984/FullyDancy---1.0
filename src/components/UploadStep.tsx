@@ -33,13 +33,18 @@ export function UploadStep({ onAssetReady }: UploadStepProps) {
         return;
       }
       if (activeAssetRef.current) releaseVideoAsset(activeAssetRef.current);
-      setAsset(nextAsset);
+      activeAssetRef.current = null;
       if (onAssetReady) {
-        activeAssetRef.current = null;
-        onAssetReady(nextAsset);
+        try {
+          onAssetReady(nextAsset);
+        } catch (reason) {
+          releaseVideoAsset(nextAsset);
+          throw reason;
+        }
       } else {
         activeAssetRef.current = nextAsset;
       }
+      setAsset(nextAsset);
     } catch (reason) {
       if (request === requestRef.current) {
         setError(reason instanceof Error ? reason.message : "无法加载该视频");
