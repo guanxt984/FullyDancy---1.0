@@ -6,6 +6,6 @@ describe("App technical slice", () => {
   it("includes the local camera validation surface", () => {
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: "?????????" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "摄像头与姿态性能验证" })).toBeInTheDocument();
   });
 });

@@ -1,17 +1,26 @@
-export interface CameraEnvironment {
-  mediaDevices: Pick<MediaDevices, "getUserMedia">;
+export interface CameraOptions {
+  mediaDevices?: Pick<MediaDevices, "getUserMedia">;
+  videoConstraints?: MediaTrackConstraints;
 }
 export interface CameraSession { stream: MediaStream; stop(): void; }
 
 export async function startCamera(
   video: HTMLVideoElement,
-  environment: CameraEnvironment = { mediaDevices: navigator.mediaDevices },
+  options: CameraOptions = {},
 ): Promise<CameraSession> {
-  const stream = await environment.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-  video.muted = true;
-  video.playsInline = true;
-  video.srcObject = stream;
-  await video.play();
+  const mediaDevices = options.mediaDevices ?? navigator.mediaDevices;
+  const videoConstraints = options.videoConstraints ?? { facingMode: "user" };
+  const stream = await mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+  try {
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    await video.play();
+  } catch (error) {
+    stream.getTracks().forEach((track) => track.stop());
+    video.srcObject = null;
+    throw error;
+  }
   return {
     stream,
     stop() {
