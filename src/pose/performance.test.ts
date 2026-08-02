@@ -51,6 +51,28 @@ describe("MediaPipePoseProvider performance safeguards", () => {
     expect(provider.detect(video, 121)?.landmarks[0]?.x).toBe(2);
   });
 
+  it("starts Lite performance statistics with only Lite inference samples", async () => {
+    let now = 0;
+    const runtime: MediaPipeRuntime = { async createLandmarker({ modelAssetPath }) {
+      const duration = modelAssetPath.includes("lite") ? 5 : 46;
+      return {
+        detectForVideo: () => {
+          now += duration;
+          return { landmarks: [[]] };
+        },
+        close() {},
+      };
+    } };
+    const provider = new MediaPipePoseProvider({ runtime, now: () => now });
+    await provider.start();
+    for (let index = 0; index < 120; index += 1) provider.detect(video, index);
+    await flushAsyncWork();
+
+    expect(provider.getModelTier()).toBe("lite");
+    provider.detect(video, 121);
+    expect(provider.getPerformanceStats()).toEqual({ sampleCount: 1, meanMs: 5, p95Ms: 5 });
+  });
+
   it("keeps Full and does not retry Lite after GPU and CPU initialization fail", async () => {
     let now = 0;
     let liteAttempts = 0;

@@ -117,6 +117,7 @@ export class MediaPipePoseProvider implements PoseProvider {
       const full = this.landmarker;
       this.landmarker = lite;
       this.tier = "lite";
+      this.recentDurations = [];
       full?.close();
     } finally {
       this.switching = false;
