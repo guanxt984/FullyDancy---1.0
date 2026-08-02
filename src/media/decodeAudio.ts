@@ -25,7 +25,8 @@ export async function decodeMonoPcm(
   let decoded: AudioBuffer;
   try {
     decoded = await context.decodeAudioData(await file.arrayBuffer());
-  } catch {
+  } catch (error) {
+    if (isNoAudioTrackDecodeFailure(error)) throw new MissingAudioTrackError();
     throw new UnsupportedAudioFormatError();
   }
 
@@ -44,4 +45,16 @@ export async function decodeMonoPcm(
     sampleRate: decoded.sampleRate,
     durationSec: decoded.duration,
   };
+}
+export const NO_AUDIO_TRACK_ERROR_CODE = "NO_AUDIO_TRACK";
+
+export interface NoAudioTrackDecodeFailure {
+  code: typeof NO_AUDIO_TRACK_ERROR_CODE;
+}
+
+function isNoAudioTrackDecodeFailure(error: unknown): error is NoAudioTrackDecodeFailure {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === NO_AUDIO_TRACK_ERROR_CODE;
 }

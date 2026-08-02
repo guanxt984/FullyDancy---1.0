@@ -43,16 +43,10 @@ describe("decodeMonoPcm", () => {
       .rejects.toThrow("不支持该视频的音频格式");
   });
 
-  it("reports a missing audio track", async () => {
-    const silentVideo = {
-      numberOfChannels: 0,
-      length: 0,
-      sampleRate: 48_000,
-      duration: 0,
-      getChannelData: () => new Float32Array(),
-    } as unknown as AudioBuffer;
+  it("preserves the decoder's no-audio-track result", async () => {
+    const noAudioTrack = Object.assign(new Error("no audio track"), { code: "NO_AUDIO_TRACK" });
 
-    await expect(decodeMonoPcm(fakeFile(), fakeContext(silentVideo)))
+    await expect(decodeMonoPcm(fakeFile(), fakeContext(noAudioTrack)))
       .rejects.toThrow("视频没有可用音轨");
   });
 });

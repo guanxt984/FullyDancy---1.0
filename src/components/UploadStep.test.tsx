@@ -52,6 +52,21 @@ describe("UploadStep", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("请选择 15–60 秒的视频");
   });
 
+  it("transfers release ownership to the asset consumer", async () => {
+    const asset = fakeAsset("handoff.mp4");
+    const onAssetReady = vi.fn();
+    fakes.createVideoAsset.mockResolvedValue(asset);
+    const view = render(<UploadStep onAssetReady={onAssetReady} />);
+
+    fireEvent.change(screen.getByLabelText("\u9009\u62e9\u7ec3\u4e60\u89c6\u9891"), { target: { files: [asset.file] } });
+
+    await screen.findByText("handoff.mp4\uff0830.0 \u79d2\uff09");
+    expect(onAssetReady).toHaveBeenCalledWith(asset);
+    view.unmount();
+
+    expect(fakes.releaseVideoAsset).not.toHaveBeenCalledWith(asset);
+  });
+
   it("releases superseded assets and the remaining asset on unmount", async () => {
     const firstAsset = fakeAsset("first.mp4");
     const secondAsset = fakeAsset("second.mp4");
