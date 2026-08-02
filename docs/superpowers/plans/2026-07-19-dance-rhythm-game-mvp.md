@@ -1,1922 +1,785 @@
-# Dance Rhythm Game MVP Implementation Plan
+# fullydancy MVP 分阶段实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Build a browser-based personal dance rhythm game MVP where a user uploads a dance video, generates a lightweight challenge, calibrates their body/camera setup, dances with real-time feedback, and reviews a replay-motivating result card.
+**Goal:** 构建可公开部署的轻量 Web 舞蹈练习 MVP：上传本地视频、确认强拍谱面、自动采集身体与机位数据，并通过本地姿态识别反馈节奏落点和“打开/蹲低”。
 
-**Architecture:** Create a Vite React TypeScript app with pure domain modules for challenge generation, calibration, judging, scoring, and weak-section selection. Keep webcam/pose-estimation behind interfaces so the first MVP can ship with a deterministic browser-friendly heuristic provider and later swap in a production pose model.
+**Architecture:** 纯浏览器、本地优先，以视频 mediaTime 为唯一游戏时钟。外部算法位于 BeatAnalyzer 与 PoseProvider 端口后；校准、运动特征、判定和计分是纯 TypeScript 模块，React 只编排流程与显示结果。先验证 MediaPipe 性能，再依次完成谱面、校准、双层判定、完整游戏循环和静态部署。
 
-**Tech Stack:** Vite, React, TypeScript, Vitest, Testing Library, Playwright, CSS modules or plain CSS.
+**Tech Stack:** Vite、React、TypeScript、Web Audio API、music-tempo、MediaPipe Tasks Vision Pose Landmarker、Web Worker、Canvas 2D、CSS、Vitest、Testing Library、Playwright。
 
 ## Global Constraints
 
-- The first version is a personal dance rhythm game, not a creator marketplace, teacher platform, or professional judging system.
-- The app must support local video upload.
-- The app must generate beats and checkpoints automatically enough to start quickly.
-- The app must support simple checkpoint confirmation without exposing raw angles, coordinates, or thresholds.
-- The app must use webcam-based full-body practice.
-- The app must include a short body and camera calibration.
-- The app must judge pose checks using relative body measurements rather than absolute screen coordinates.
-- The app must provide real-time timing feedback: Perfect, Great, Early, Late, Miss.
-- The app must provide real-time key pose feedback, combo, energy, fever, and high-impact visual feedback.
-- The app must show a post-run result card with score, best sections, weak sections, retry, and weak-section practice.
-- The MVP must not include public sharing, leaderboards, multiplayer, teacher course marketplace, professional frame-by-frame judging, complex manual chart editing, or fine judging of hands, feet, facial expression, or texture.
+- 单人模式；首发支持桌面 Chrome 和 Edge，其他浏览器先做能力检测。
+- 视频、摄像头帧、姿态关键点、身体比例和校准结果不得上传。
+- 不需要登录、数据库、云同步或应用后端。
+- 本地视频限制 15–60 秒；对象地址在会话结束时 revoke。
+- 每个保留强拍都判定节奏；每拍最多附加 open 或 squat 一种动作状态。
+- open：卡点窗口内任意一只可靠手臂伸直即命中；方向无关，提前伸直并保持也有效。
+- squat：达到个人校准下蹲深度约 85% 即命中；提前蹲低并保持也有效。
+- 无法可靠识别时返回 unjudgeable，不算动作失败且不打断 Combo。
+- Combo 仅由节奏维持；动作只影响完成率、额外分数和能量。
+- 时间窗集中配置：Perfect ±100ms、Great ±200ms、Early/Late ±350ms，其余 Miss。
+- 完整校准目标 6–8 秒；再来一局先做约 2 秒机位复核，明显变化才重校准。
+- Pose Landmarker 默认 Full，性能不足降级 Lite；目标约 20 FPS。
+- 摄像头帧在推理前绑定 video.currentTime；推理完成时间不得用于节奏判定。
+- 公开版本使用 HTTPS 静态托管，自托管并缓存 Pose 模型和 WASM。
+- 先写失败测试，再写最小实现；每个任务独立验证并提交。
+- 不比较原视频姿势，不识别原视频动作，不引入大型游戏引擎。
 
 ---
 
-## File Structure
+## 文件结构
 
-- `package.json`: project scripts and dependencies.
-- `index.html`: Vite HTML entry.
-- `vite.config.ts`: Vite configuration.
-- `tsconfig.json`, `tsconfig.node.json`: TypeScript configuration.
-- `vitest.config.ts`: unit test configuration.
-- `playwright.config.ts`: end-to-end test configuration.
-- `src/main.tsx`: React entry.
-- `src/App.tsx`: top-level app state machine.
-- `src/styles.css`: global visual language for the game UI.
-- `src/domain/types.ts`: shared domain types.
-- `src/domain/challengeGenerator.ts`: turns video metadata into beats and checkpoint suggestions.
-- `src/domain/calibration.ts`: derives body calibration from normalized pose samples.
-- `src/domain/judging.ts`: evaluates timing and relative pose hits.
-- `src/domain/scoring.ts`: computes score, grade, combo, energy, fever, best sections, and weak sections.
-- `src/services/videoMetadata.ts`: reads uploaded video duration and object URL.
-- `src/services/webcam.ts`: starts/stops webcam streams.
-- `src/services/poseProvider.ts`: defines pose provider interface and heuristic demo provider.
-- `src/components/UploadStep.tsx`: local video upload UI.
-- `src/components/CheckpointConfirmStep.tsx`: lightweight checkpoint confirmation UI.
-- `src/components/CalibrationStep.tsx`: full-body calibration UI and guidance.
-- `src/components/ChallengeStep.tsx`: gameplay screen with video, webcam preview, rhythm lane, feedback, combo, and energy.
-- `src/components/ResultStep.tsx`: result card with retry and weak-section practice actions.
-- `src/test/fixtures.ts`: deterministic fixtures for unit tests.
-- `src/**/*.test.ts`: unit tests beside domain modules.
-- `tests/e2e/mvp-flow.spec.ts`: browser smoke test for the full MVP loop.
+- package.json、vite.config.ts、tsconfig*.json：工程、构建和严格类型。
+- vitest.config.ts、playwright.config.ts：单元、组件和浏览器测试。
+- public/models/、public/wasm/、scripts/sync-mediapipe-assets.mjs：本地模型资源。
+- src/app/App.tsx、src/app/sessionReducer.ts：流程装配和状态机。
+- src/config/gameConfig.ts、src/domain/types.ts：集中阈值和共享类型。
+- src/media/：视频对象地址、时长校验与音轨解码。
+- src/beat-analysis/：算法端口、music-tempo 适配、显著度筛选和 Worker。
+- src/chart/：谱面生成、启停与动作标记。
+- src/pose/：摄像头、MediaPipe 适配、质量分类和 20 FPS 循环。
+- src/calibration/：稳定帧聚合、完整校准和 2 秒复核。
+- src/motion/：关节角、髋部下降、归一化速度和落点检测。
+- src/judging/、src/scoring/：双层判定与计分。
+- src/components/、src/render/：五步界面、骨架和轻量反馈。
+- src/test/fixtures/、tests/e2e/：姿态序列与完整流程夹具。
+- .github/workflows/verify-and-deploy.yml：验证与静态部署。
 
 ---
 
-### Task 1: Project Scaffold And Test Harness
+# Phase 1：浏览器技术可行性
+
+### Task 1: 工程骨架、能力检测和共享契约
 
 **Files:**
-- Create: `package.json`
-- Create: `index.html`
-- Create: `vite.config.ts`
-- Create: `tsconfig.json`
-- Create: `tsconfig.node.json`
-- Create: `vitest.config.ts`
-- Create: `playwright.config.ts`
-- Create: `src/main.tsx`
-- Create: `src/App.tsx`
-- Create: `src/styles.css`
-- Create: `src/domain/types.ts`
-- Create: `src/test/fixtures.ts`
-- Test: `src/App.test.tsx`
+- Create: package.json
+- Create: index.html
+- Create: vite.config.ts
+- Create: tsconfig.json
+- Create: tsconfig.app.json
+- Create: vitest.config.ts
+- Create: playwright.config.ts
+- Create: src/main.tsx
+- Create: src/app/App.tsx
+- Create: src/config/gameConfig.ts
+- Create: src/domain/types.ts
+- Create: src/platform/capabilities.ts
+- Test: src/platform/capabilities.test.ts
+- Create: src/test/setup.ts
 
 **Interfaces:**
-- Produces: `App(): JSX.Element`
-- Produces: domain type exports from `src/domain/types.ts`
+- Produces: detectCapabilities(environment?: CapabilityEnvironment): CapabilityReport
+- Produces: BeatPoint、PoseFrame、CalibrationProfile、BeatJudgement、ActionJudgement、BeatResult
+- Produces: GAME_CONFIG；后续任务不得散落阈值。
 
-- [ ] **Step 1: Create the failing app render test**
+- [ ] **Step 1: 写能力检测失败测试**
 
-Create `src/App.test.tsx`:
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { App } from "./App";
-
-describe("App", () => {
-  it("starts at the upload step for the personal dance challenge", () => {
-    render(<App />);
-
-    expect(screen.getByRole("heading", { name: /create your dance challenge/i })).toBeInTheDocument();
-    expect(screen.getByText(/upload a local dance video/i)).toBeInTheDocument();
-  });
+~~~ts
+it("requires camera, Web Audio and Worker", () => {
+  expect(detectCapabilities(fakeEnvironment({ mediaDevices: false })).supported).toBe(false);
+  expect(detectCapabilities(fakeEnvironment()).supported).toBe(true);
 });
-```
+~~~
 
-- [ ] **Step 2: Add project configuration**
+- [ ] **Step 2: 运行并确认 RED**
 
-Create `package.json`:
+Run: npm.cmd test -- src/platform/capabilities.test.ts
+Expected: FAIL，capabilities 模块不存在。
 
-```json
-{
-  "name": "dance-rhythm-game-mvp",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "e2e": "playwright test"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.0.7",
-    "typescript": "^5.7.2",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.49.1",
-    "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.1.0",
-    "@testing-library/user-event": "^14.5.2",
-    "jsdom": "^25.0.1",
-    "vitest": "^2.1.8"
-  }
-}
-```
+- [ ] **Step 3: 建立类型和集中配置**
 
-Create `index.html`:
-
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dance Rhythm Game MVP</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-```
-
-Create `vite.config.ts`:
-
-```ts
-import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
-
-export default defineConfig({
-  plugins: [react()],
-});
-```
-
-Create `tsconfig.json`:
-
-```json
-{
-  "files": [],
-  "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.app.json" }]
-}
-```
-
-Create `tsconfig.node.json`:
-
-```json
-{
-  "compilerOptions": {
-    "composite": true,
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "strict": true,
-    "types": ["node"]
-  },
-  "include": ["vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
-}
-```
-
-Create `tsconfig.app.json`:
-
-```json
-{
-  "compilerOptions": {
-    "composite": true,
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2022"],
-    "allowJs": false,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "types": ["vitest/globals", "@testing-library/jest-dom"]
-  },
-  "include": ["src"]
-}
-```
-
-Create `vitest.config.ts`:
-
-```ts
-import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
-
-export default defineConfig({
-  plugins: [react()],
-  test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: ["./src/test/setup.ts"],
-  },
-});
-```
-
-Create `playwright.config.ts`:
-
-```ts
-import { defineConfig, devices } from "@playwright/test";
-
-export default defineConfig({
-  testDir: "./tests/e2e",
-  webServer: {
-    command: "npm run dev -- --host 127.0.0.1 --port 5174",
-    url: "http://127.0.0.1:5174",
-    reuseExistingServer: true,
-  },
-  use: {
-    baseURL: "http://127.0.0.1:5174",
-    trace: "on-first-retry",
-  },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-});
-```
-
-Create `src/test/setup.ts`:
-
-```ts
-import "@testing-library/jest-dom/vitest";
-```
-
-- [ ] **Step 3: Create the minimal app and shared types**
-
-Create `src/domain/types.ts`:
-
-```ts
-export type BodyTarget = "leftArm" | "rightArm" | "shoulders" | "hips" | "knees" | "centerOfMass";
-export type CheckpointIntent = "extension" | "squat" | "hold" | "turn" | "fastArrival";
-export type Strictness = "loose" | "standard" | "strict";
-export type TimingJudgment = "Perfect" | "Great" | "Early" | "Late" | "Miss";
-export type PoseJudgment = "Pose Lock" | "Loose" | "Off Shape";
-
-export interface VideoAsset {
-  id: string;
-  name: string;
-  url: string;
-  durationSec: number;
-}
-
-export interface Checkpoint {
-  id: string;
-  time: number;
-  beat?: number;
-  label: string;
-  bodyTargets: BodyTarget[];
-  intent: CheckpointIntent;
-  timingWindowMs: number;
-  strictness: Strictness;
-  feedback: {
-    hit: string;
-    miss: string;
-  };
-}
+~~~ts
+export type ActionRequirement = "rhythm" | "open" | "squat";
+export type TimingGrade = "perfect" | "great" | "early" | "late" | "miss";
+export type ActionGrade = "hit" | "miss" | "unjudgeable";
+export type Side = "left" | "right";
+export type Reliable<T> =
+  | { kind: "value"; value: T }
+  | { kind: "unjudgeable"; reason: string };
 
 export interface PoseLandmark {
   x: number;
   y: number;
+  z: number;
   visibility: number;
 }
-
 export interface PoseFrame {
-  timestampSec: number;
-  landmarks: Partial<Record<BodyTarget | "leftWrist" | "rightWrist" | "leftElbow" | "rightElbow", PoseLandmark>>;
+  captureTimeSec: number;
+  landmarks: PoseLandmark[];
 }
-
-export interface CalibrationProfile {
-  shoulderWidth: number;
-  armSpan: number;
-  standingHipY: number;
-  naturalSquatHipY: number;
+export interface CameraSignature {
   bodyScale: number;
-  fullBodyVisible: boolean;
+  centerX: number;
+  centerY: number;
+  limbRatios: Record<string, number>;
 }
-
-export interface HitResult {
-  checkpointId: string;
-  timing: TimingJudgment;
-  pose: PoseJudgment;
-  deltaMs: number;
-  score: number;
-  message: string;
+export interface CalibrationProfile {
+  bodyScale: number;
+  straightArmAngle: Record<Side, number>;
+  standingHipHeight: number;
+  squatDepth: number | null;
+  cameraSignature: CameraSignature;
 }
-
-export interface RunSummary {
-  grade: "S" | "A" | "B" | "C";
-  totalScore: number;
-  highestCombo: number;
-  timingAccuracy: number;
-  frameworkHitRate: number;
-  bestSectionLabel: string;
-  weakestSectionLabel: string;
+export interface BeatPoint {
+  id: string;
+  beatIndex: number;
+  timeSec: number;
+  salience: number;
+  enabled: boolean;
+  action: ActionRequirement;
 }
-```
-
-Create `src/App.tsx`:
-
-```tsx
-export function App() {
-  return (
-    <main className="app-shell">
-      <section className="hero-panel">
-        <p className="eyebrow">Personal dance rhythm game</p>
-        <h1>Create your dance challenge</h1>
-        <p>Upload a local dance video, generate a playable challenge, and dance with webcam feedback.</p>
-      </section>
-    </main>
-  );
+export interface BeatJudgement {
+  grade: TimingGrade;
+  deltaMs: number | null;
+  endpointId: string | null;
 }
-```
-
-Create `src/main.tsx`:
-
-```tsx
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import "./styles.css";
-
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
-```
-
-Create `src/styles.css`:
-
-```css
-:root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #f7fbff;
-  background: #090a10;
+export interface ActionJudgement {
+  action: Exclude<ActionRequirement, "rhythm">;
+  grade: ActionGrade;
+  reason?: string;
 }
-
-* {
-  box-sizing: border-box;
+export interface BeatResult {
+  beatId: string;
+  timing: BeatJudgement;
+  action: ActionJudgement | null;
 }
+~~~
 
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-}
+GAME_CONFIG 初值：timingWindowsMs 100/200/350、poseFps 20、minimumVisibility 0.6、openAngleToleranceDeg 10、squatRatio 0.85、fullCalibrationMs 6000、retryVerificationMs 2000。
 
-button,
-input {
-  font: inherit;
-}
+- [ ] **Step 4: 实现能力页**
 
-.app-shell {
-  min-height: 100vh;
-  padding: 32px;
-  background:
-    radial-gradient(circle at 20% 20%, rgba(255, 45, 85, 0.24), transparent 28%),
-    radial-gradient(circle at 84% 12%, rgba(0, 209, 255, 0.22), transparent 24%),
-    linear-gradient(135deg, #090a10, #12131d 52%, #10141a);
-}
+检测 getUserMedia、AudioContext、Worker、HTMLVideoElement 和 requestAnimationFrame。requestVideoFrameCallback 缺失时允许回退。页面固定显示“视频和摄像头数据仅在本机处理”。
 
-.hero-panel {
-  max-width: 760px;
-}
+- [ ] **Step 5: 验证并提交**
 
-.eyebrow {
-  margin: 0 0 12px;
-  color: #64e3ff;
-  font-weight: 700;
-  text-transform: uppercase;
-}
+Run: npm.cmd test -- src/platform/capabilities.test.ts
+Run: npm.cmd run build
+Expected: 测试通过，构建退出 0。
 
-h1 {
-  margin: 0 0 16px;
-  font-size: 48px;
-  line-height: 1.04;
-}
-```
+~~~powershell
+git add package.json package-lock.json index.html vite.config.ts tsconfig*.json vitest.config.ts playwright.config.ts src
+git commit -m "chore: scaffold local-first dance MVP"
+~~~
 
-Create `src/test/fixtures.ts`:
-
-```ts
-import type { CalibrationProfile, Checkpoint, PoseFrame, VideoAsset } from "../domain/types";
-
-export const fixtureVideo: VideoAsset = {
-  id: "video-1",
-  name: "demo.mp4",
-  url: "blob:demo",
-  durationSec: 32,
-};
-
-export const fixtureCheckpoint: Checkpoint = {
-  id: "cp-1",
-  time: 8,
-  beat: 16,
-  label: "Arm open",
-  bodyTargets: ["rightArm", "shoulders"],
-  intent: "extension",
-  timingWindowMs: 120,
-  strictness: "standard",
-  feedback: { hit: "Pose Lock", miss: "Arm not open" },
-};
-
-export const fixtureCalibration: CalibrationProfile = {
-  shoulderWidth: 0.22,
-  armSpan: 0.72,
-  standingHipY: 0.52,
-  naturalSquatHipY: 0.72,
-  bodyScale: 1,
-  fullBodyVisible: true,
-};
-
-export const fixturePoseFrame: PoseFrame = {
-  timestampSec: 8.04,
-  landmarks: {
-    shoulders: { x: 0.5, y: 0.28, visibility: 0.95 },
-    hips: { x: 0.5, y: 0.52, visibility: 0.95 },
-    rightWrist: { x: 0.86, y: 0.3, visibility: 0.95 },
-    rightElbow: { x: 0.68, y: 0.29, visibility: 0.95 },
-    rightArm: { x: 0.77, y: 0.3, visibility: 0.95 },
-  },
-};
-```
-
-- [ ] **Step 4: Run the failing test, install dependencies, then pass**
-
-Run: `npm install`
-
-Run: `npm test -- src/App.test.tsx`
-
-Expected after implementation: PASS with `1 passed`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add package.json package-lock.json index.html vite.config.ts tsconfig.json tsconfig.node.json tsconfig.app.json vitest.config.ts playwright.config.ts src
-git commit -m "feat: scaffold dance rhythm game app"
-```
-
----
-
-### Task 2: Video Upload And Metadata
+### Task 2: 真实摄像头与 MediaPipe 性能切片
 
 **Files:**
-- Create: `src/services/videoMetadata.ts`
-- Create: `src/services/videoMetadata.test.ts`
-- Create: `src/components/UploadStep.tsx`
-- Create: `src/components/UploadStep.test.tsx`
-- Modify: `src/App.tsx`
+- Create: scripts/sync-mediapipe-assets.mjs
+- Create: src/pose/types.ts
+- Create: src/pose/camera.ts
+- Create: src/pose/mediaPipePoseProvider.ts
+- Create: src/pose/poseLoop.ts
+- Test: src/pose/mediaPipePoseProvider.test.ts
+- Create: src/components/TechnicalSlice.tsx
+- Modify: package.json
+- Modify: src/app/App.tsx
 
 **Interfaces:**
-- Consumes: `VideoAsset` from `src/domain/types.ts`
-- Produces: `readVideoAsset(file: File): Promise<VideoAsset>`
-- Produces: `UploadStep(props: { onVideoReady(video: VideoAsset): void }): JSX.Element`
+- Produces: PoseProvider 与 runPoseLoop：
 
-- [ ] **Step 1: Write video metadata unit tests**
+~~~ts
+export interface PoseProvider {
+  start(): Promise<void>;
+  detect(video: HTMLVideoElement, captureTimeSec: number): PoseFrame | null;
+  stop(): void;
+}
+export function runPoseLoop(options: PoseLoopOptions): () => void;
+~~~
 
-Create `src/services/videoMetadata.test.ts`:
+- [ ] **Step 1: 写时间戳和防重入测试**
 
-```ts
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { readVideoAsset } from "./videoMetadata";
-
-describe("readVideoAsset", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("creates a local video asset from an uploaded file", async () => {
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:local-video");
-
-    const file = new File(["video"], "practice.mp4", { type: "video/mp4" });
-    const asset = await readVideoAsset(file, 42);
-
-    expect(asset).toEqual({
-      id: "practice-mp4-42",
-      name: "practice.mp4",
-      url: "blob:local-video",
-      durationSec: 42,
-    });
-  });
+~~~ts
+it("preserves capture media time", () => {
+  expect(normalizePoseResult(fakeResult(), 12.345)?.captureTimeSec).toBe(12.345);
 });
-```
-
-- [ ] **Step 2: Implement video metadata service**
-
-Create `src/services/videoMetadata.ts`:
-
-```ts
-import type { VideoAsset } from "../domain/types";
-
-export async function readVideoAsset(file: File, knownDurationSec?: number): Promise<VideoAsset> {
-  const url = URL.createObjectURL(file);
-  const durationSec = knownDurationSec ?? (await loadVideoDuration(url));
-
-  return {
-    id: `${file.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Math.round(durationSec)}`,
-    name: file.name,
-    url,
-    durationSec,
-  };
-}
-
-function loadVideoDuration(url: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.onloadedmetadata = () => resolve(Number.isFinite(video.duration) ? video.duration : 0);
-    video.onerror = () => reject(new Error("Unable to read video metadata."));
-    video.src = url;
-  });
-}
-```
-
-- [ ] **Step 3: Write upload component test**
-
-Create `src/components/UploadStep.test.tsx`:
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { UploadStep } from "./UploadStep";
-
-describe("UploadStep", () => {
-  it("accepts a local video file and calls onVideoReady", async () => {
-    const onVideoReady = vi.fn();
-    render(<UploadStep onVideoReady={onVideoReady} />);
-
-    const file = new File(["demo"], "demo.mp4", { type: "video/mp4" });
-    const input = screen.getByLabelText(/upload a local dance video/i);
-    await userEvent.upload(input, file);
-
-    expect(await screen.findByText(/demo.mp4/i)).toBeInTheDocument();
-    expect(onVideoReady).toHaveBeenCalledWith(expect.objectContaining({ name: "demo.mp4" }));
-  });
+it("does not overlap inference", () => {
+  const detect = vi.fn(() => pendingFrame.promise);
+  const stop = runPoseLoop(fakeLoopOptions({ detect }));
+  tickVideoFrame(1);
+  tickVideoFrame(1.02);
+  expect(detect).toHaveBeenCalledOnce();
+  stop();
 });
-```
+~~~
 
-- [ ] **Step 4: Implement upload component**
+- [ ] **Step 2: 运行并确认 RED**
 
-Create `src/components/UploadStep.tsx`:
+Run: npm.cmd test -- src/pose/mediaPipePoseProvider.test.ts
+Expected: FAIL，适配器不存在。
 
-```tsx
-import { useState } from "react";
-import type { VideoAsset } from "../domain/types";
-import { readVideoAsset } from "../services/videoMetadata";
+- [ ] **Step 3: 实现本地资源和 PoseProvider**
 
-interface UploadStepProps {
-  onVideoReady(video: VideoAsset): void;
-}
+同步脚本从 https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task 和 https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task 下载版本 1 模型，以版本化文件名保存到 public/models，并从锁定版本的 @mediapipe/tasks-vision 复制 WASM 到 public/wasm。Landmarker 使用 VIDEO、numPoses: 1、outputSegmentationMasks: false；GPU 失败回退 CPU。默认 Full，连续 120 帧平均推理超过 45ms 时切换 Lite。
 
-export function UploadStep({ onVideoReady }: UploadStepProps) {
-  const [fileName, setFileName] = useState("");
-  const [error, setError] = useState("");
+- [ ] **Step 4: 实现 20 FPS 技术页**
 
-  async function handleFile(file: File | undefined) {
-    if (!file) return;
-    if (!file.type.startsWith("video/")) {
-      setError("Choose a video file.");
-      return;
-    }
+优先 requestVideoFrameCallback，回退 requestAnimationFrame；相邻推理至少 50ms且禁止重入。detect 前读取 video.currentTime。停止时取消回调、关闭模型并停止全部摄像头轨道。
 
-    setError("");
-    setFileName(file.name);
-    const asset = await readVideoAsset(file);
-    onVideoReady(asset);
-  }
+- [ ] **Step 5: 真人设备闸门**
 
-  return (
-    <section className="step-panel">
-      <p className="eyebrow">Step 1</p>
-      <h1>Create your dance challenge</h1>
-      <p>Upload a local dance video and turn it into a playable practice run.</p>
-      <label className="upload-zone">
-        <span>Upload a local dance video</span>
-        <input type="file" accept="video/*" onChange={(event) => void handleFile(event.target.files?.[0])} />
-      </label>
-      {fileName ? <p className="status-line">Loaded {fileName}</p> : null}
-      {error ? <p className="error-line">{error}</p> : null}
-    </section>
-  );
-}
-```
+Run: npm.cmd run dev -- --host 127.0.0.1 --port 5174
+在 Chrome、Edge 验证镜像、骨架、全身可见性和连续运行 3 分钟资源释放。记录 Full/Lite 平均及 P95。
+Expected: 至少一种模型 P95 ≤ 50ms；两者失败时先降到 960×540 复测，通过前不进入 Phase 2。
 
-- [ ] **Step 5: Wire upload into App**
+- [ ] **Step 6: 验证并提交**
 
-Modify `src/App.tsx`:
+Run: npm.cmd test -- src/pose/mediaPipePoseProvider.test.ts
+Run: npm.cmd run build
 
-```tsx
-import { useState } from "react";
-import { UploadStep } from "./components/UploadStep";
-import type { VideoAsset } from "./domain/types";
-
-export function App() {
-  const [video, setVideo] = useState<VideoAsset | null>(null);
-
-  return (
-    <main className="app-shell">
-      {!video ? <UploadStep onVideoReady={setVideo} /> : <section className="step-panel"><h1>{video.name}</h1></section>}
-    </main>
-  );
-}
-```
-
-- [ ] **Step 6: Run tests and commit**
-
-Run: `npm test -- src/services/videoMetadata.test.ts src/components/UploadStep.test.tsx src/App.test.tsx`
-
-Expected: PASS with all listed tests passing.
-
-```bash
-git add src/services src/components src/App.tsx
-git commit -m "feat: add local video upload"
-```
+~~~powershell
+git add package.json package-lock.json scripts public src/pose src/components/TechnicalSlice.tsx src/app/App.tsx
+git commit -m "feat: validate local MediaPipe pose pipeline"
+~~~
 
 ---
 
-### Task 3: Automatic Challenge Generation
+# Phase 2：本地视频与轻量谱面
+
+### Task 3: 上传、时长校验和音轨解码
 
 **Files:**
-- Create: `src/domain/challengeGenerator.ts`
-- Create: `src/domain/challengeGenerator.test.ts`
-- Create: `src/components/CheckpointConfirmStep.tsx`
-- Create: `src/components/CheckpointConfirmStep.test.tsx`
-- Modify: `src/App.tsx`
+- Create: src/media/videoAsset.ts
+- Test: src/media/videoAsset.test.ts
+- Create: src/media/decodeAudio.ts
+- Test: src/media/decodeAudio.test.ts
+- Create: src/components/UploadStep.tsx
+- Test: src/components/UploadStep.test.tsx
 
 **Interfaces:**
-- Consumes: `VideoAsset`, `Checkpoint`
-- Produces: `generateChallenge(video: VideoAsset): Checkpoint[]`
-- Produces: `CheckpointConfirmStep(props: { video: VideoAsset; checkpoints: Checkpoint[]; onConfirm(checkpoints: Checkpoint[]): void }): JSX.Element`
+- Produces: createVideoAsset(file): Promise<VideoAsset>
+- Produces: releaseVideoAsset(asset): void
+- Produces: decodeMonoPcm(file, context): Promise<PcmAudio>
 
-- [ ] **Step 1: Write challenge generator tests**
+- [ ] **Step 1: 写边界与清理测试**
 
-Create `src/domain/challengeGenerator.test.ts`:
-
-```ts
-import { describe, expect, it } from "vitest";
-import { fixtureVideo } from "../test/fixtures";
-import { generateChallenge } from "./challengeGenerator";
-
-describe("generateChallenge", () => {
-  it("creates playable checkpoints from video duration", () => {
-    const checkpoints = generateChallenge({ ...fixtureVideo, durationSec: 32 });
-
-    expect(checkpoints).toHaveLength(8);
-    expect(checkpoints[0]).toMatchObject({
-      time: 4,
-      beat: 8,
-      label: "Arm open",
-      intent: "extension",
-      strictness: "standard",
-    });
-    expect(checkpoints.every((checkpoint) => checkpoint.timingWindowMs === 120)).toBe(true);
-  });
-
-  it("caps checkpoint count so confirmation stays lightweight", () => {
-    const checkpoints = generateChallenge({ ...fixtureVideo, durationSec: 180 });
-
-    expect(checkpoints).toHaveLength(20);
-  });
+~~~ts
+it.each([14.99, 60.01])("rejects %s seconds", async (durationSec) => {
+  await expect(createVideoAsset(fakeVideoFile(), fakeMetadata(durationSec)))
+    .rejects.toThrow("请选择 15–60 秒的视频");
 });
-```
-
-- [ ] **Step 2: Implement deterministic MVP generator**
-
-Create `src/domain/challengeGenerator.ts`:
-
-```ts
-import type { Checkpoint, CheckpointIntent, VideoAsset } from "./types";
-
-const labelCycle: Array<{ label: string; intent: CheckpointIntent; miss: string }> = [
-  { label: "Arm open", intent: "extension", miss: "Arm not open" },
-  { label: "Squat low", intent: "squat", miss: "Go lower" },
-  { label: "Hold the pose", intent: "hold", miss: "Do not drift" },
-  { label: "Hit fast", intent: "fastArrival", miss: "Too soft" },
-  { label: "Turn body", intent: "turn", miss: "Turn more" },
-];
-
-export function generateChallenge(video: VideoAsset): Checkpoint[] {
-  const count = Math.min(20, Math.max(5, Math.floor(video.durationSec / 4)));
-  return Array.from({ length: count }, (_, index) => {
-    const preset = labelCycle[index % labelCycle.length];
-    const time = Number((((index + 1) * video.durationSec) / (count + 1)).toFixed(2));
-
-    return {
-      id: `cp-${index + 1}`,
-      time,
-      beat: (index + 1) * 8,
-      label: preset.label,
-      bodyTargets: preset.intent === "squat" ? ["hips", "knees"] : ["rightArm", "shoulders"],
-      intent: preset.intent,
-      timingWindowMs: 120,
-      strictness: "standard",
-      feedback: {
-        hit: preset.intent === "hold" ? "Pose Lock" : "Perfect hit",
-        miss: preset.miss,
-      },
-    };
-  });
-}
-```
-
-- [ ] **Step 3: Write checkpoint confirmation test**
-
-Create `src/components/CheckpointConfirmStep.test.tsx`:
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { fixtureCheckpoint, fixtureVideo } from "../test/fixtures";
-import { CheckpointConfirmStep } from "./CheckpointConfirmStep";
-
-describe("CheckpointConfirmStep", () => {
-  it("lets the user confirm generated checkpoints", async () => {
-    const onConfirm = vi.fn();
-    render(<CheckpointConfirmStep video={fixtureVideo} checkpoints={[fixtureCheckpoint]} onConfirm={onConfirm} />);
-
-    expect(screen.getByText(/arm open/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /start calibration/i }));
-
-    expect(onConfirm).toHaveBeenCalledWith([fixtureCheckpoint]);
-  });
+it("revokes the object URL", () => {
+  releaseVideoAsset(fakeAsset("blob:practice"));
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:practice");
 });
-```
+~~~
 
-- [ ] **Step 4: Implement checkpoint confirmation**
+- [ ] **Step 2: 运行并确认 RED**
 
-Create `src/components/CheckpointConfirmStep.tsx`:
+Run: npm.cmd test -- src/media
+Expected: FAIL，媒体模块不存在。
 
-```tsx
-import type { Checkpoint, VideoAsset } from "../domain/types";
+- [ ] **Step 3: 实现媒体模块**
 
-interface CheckpointConfirmStepProps {
-  video: VideoAsset;
-  checkpoints: Checkpoint[];
-  onConfirm(checkpoints: Checkpoint[]): void;
-}
+仅接受 video/*；临时 video 元素读取 metadata，createObjectURL 播放。decodeAudioData 后将多声道逐样本平均为 Float32Array。错误区分格式不支持、无音轨和时长越界。
 
-export function CheckpointConfirmStep({ video, checkpoints, onConfirm }: CheckpointConfirmStepProps) {
-  return (
-    <section className="step-panel">
-      <p className="eyebrow">Step 2</p>
-      <h1>Quick challenge generated</h1>
-      <p>{video.name} became {checkpoints.length} playable checkpoints.</p>
-      <div className="checkpoint-list">
-        {checkpoints.map((checkpoint) => (
-          <article className="checkpoint-card" key={checkpoint.id}>
-            <strong>{checkpoint.label}</strong>
-            <span>{checkpoint.time.toFixed(1)}s</span>
-            <small>{checkpoint.feedback.miss}</small>
-          </article>
-        ))}
-      </div>
-      <button className="primary-button" onClick={() => onConfirm(checkpoints)}>Start calibration</button>
-    </section>
-  );
-}
-```
+- [ ] **Step 4: 验证并提交**
 
-- [ ] **Step 5: Wire generation flow into App**
+Run: npm.cmd test -- src/media src/components/UploadStep.test.tsx
 
-Modify `src/App.tsx` so upload moves to checkpoint confirmation:
+~~~powershell
+git add src/media src/components/UploadStep*
+git commit -m "feat: load local practice videos"
+~~~
 
-```tsx
-import { useState } from "react";
-import { CheckpointConfirmStep } from "./components/CheckpointConfirmStep";
-import { UploadStep } from "./components/UploadStep";
-import { generateChallenge } from "./domain/challengeGenerator";
-import type { Checkpoint, VideoAsset } from "./domain/types";
-
-type Step = "upload" | "confirm" | "calibration";
-
-export function App() {
-  const [step, setStep] = useState<Step>("upload");
-  const [video, setVideo] = useState<VideoAsset | null>(null);
-  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
-
-  function handleVideoReady(asset: VideoAsset) {
-    setVideo(asset);
-    setCheckpoints(generateChallenge(asset));
-    setStep("confirm");
-  }
-
-  function handleConfirm(confirmed: Checkpoint[]) {
-    setCheckpoints(confirmed);
-    setStep("calibration");
-  }
-
-  return (
-    <main className="app-shell">
-      {step === "upload" ? <UploadStep onVideoReady={handleVideoReady} /> : null}
-      {step === "confirm" && video ? <CheckpointConfirmStep video={video} checkpoints={checkpoints} onConfirm={handleConfirm} /> : null}
-      {step === "calibration" ? <section className="step-panel"><h1>Calibration</h1></section> : null}
-    </main>
-  );
-}
-```
-
-- [ ] **Step 6: Run tests and commit**
-
-Run: `npm test -- src/domain/challengeGenerator.test.ts src/components/CheckpointConfirmStep.test.tsx src/App.test.tsx`
-
-Expected: PASS with all listed tests passing.
-
-```bash
-git add src/domain/challengeGenerator.ts src/domain/challengeGenerator.test.ts src/components/CheckpointConfirmStep.tsx src/components/CheckpointConfirmStep.test.tsx src/App.tsx
-git commit -m "feat: generate quick dance checkpoints"
-```
-
----
-
-### Task 4: Calibration Domain And UI
+### Task 4: Worker 强拍分析、显著度筛选和谱面
 
 **Files:**
-- Create: `src/domain/calibration.ts`
-- Create: `src/domain/calibration.test.ts`
-- Create: `src/components/CalibrationStep.tsx`
-- Create: `src/components/CalibrationStep.test.tsx`
-- Modify: `src/App.tsx`
+- Create: src/beat-analysis/beatAnalyzer.ts
+- Create: src/beat-analysis/musicTempoAdapter.ts
+- Create: src/beat-analysis/salience.ts
+- Create: src/beat-analysis/analysis.worker.ts
+- Create: src/beat-analysis/workerClient.ts
+- Test: src/beat-analysis/salience.test.ts
+- Test: src/beat-analysis/workerClient.test.ts
+- Create: src/chart/chart.ts
+- Test: src/chart/chart.test.ts
+- Create: src/components/ChartEditor.tsx
+- Test: src/components/ChartEditor.test.tsx
 
 **Interfaces:**
-- Consumes: `PoseFrame`, `CalibrationProfile`
-- Produces: `buildCalibrationProfile(samples: PoseFrame[]): CalibrationProfile`
-- Produces: `getCalibrationGuidance(profile: CalibrationProfile): string[]`
-- Produces: `CalibrationStep(props: { onComplete(profile: CalibrationProfile): void }): JSX.Element`
+- Produces: BeatAnalyzer.analyze(audio): Promise<BeatCandidate[]>
+- Produces: filterSalientBeats(candidates, pcm, config): BeatCandidate[]
+- Produces: createChart(candidates): BeatPoint[]
+- Produces: updateBeat(chart, beatId, patch): BeatPoint[]
 
-- [ ] **Step 1: Write calibration domain tests**
+- [ ] **Step 1: 写密度和谱面测试**
 
-Create `src/domain/calibration.test.ts`:
-
-```ts
-import { describe, expect, it } from "vitest";
-import { buildCalibrationProfile, getCalibrationGuidance } from "./calibration";
-import type { PoseFrame } from "./types";
-
-const samples: PoseFrame[] = [
-  {
-    timestampSec: 0,
-    landmarks: {
-      shoulders: { x: 0.5, y: 0.25, visibility: 0.95 },
-      hips: { x: 0.5, y: 0.52, visibility: 0.95 },
-      leftWrist: { x: 0.12, y: 0.28, visibility: 0.95 },
-      rightWrist: { x: 0.88, y: 0.28, visibility: 0.95 },
-    },
-  },
-  {
-    timestampSec: 1,
-    landmarks: {
-      shoulders: { x: 0.5, y: 0.25, visibility: 0.95 },
-      hips: { x: 0.5, y: 0.72, visibility: 0.95 },
-      leftWrist: { x: 0.14, y: 0.31, visibility: 0.95 },
-      rightWrist: { x: 0.86, y: 0.31, visibility: 0.95 },
-    },
-  },
-];
-
-describe("calibration", () => {
-  it("builds a relative body profile from pose samples", () => {
-    const profile = buildCalibrationProfile(samples);
-
-    expect(profile.armSpan).toBeCloseTo(0.76);
-    expect(profile.standingHipY).toBeCloseTo(0.52);
-    expect(profile.naturalSquatHipY).toBeCloseTo(0.72);
-    expect(profile.fullBodyVisible).toBe(true);
-  });
-
-  it("blocks when visibility is too low", () => {
-    const profile = buildCalibrationProfile([
-      { ...samples[0], landmarks: { shoulders: { x: 0.5, y: 0.25, visibility: 0.2 } } },
-    ]);
-
-    expect(getCalibrationGuidance(profile)).toContain("Stand fully in frame.");
-  });
+~~~ts
+it("removes weak beats that are too close", () => {
+  const result = filterSalientBeats(candidatesAt([1, 1.1, 1.5]), impulsePcm([1, 1.5]), config);
+  expect(result.map((beat) => beat.timeSec)).toEqual([1, 1.5]);
 });
-```
-
-- [ ] **Step 2: Implement calibration domain**
-
-Create `src/domain/calibration.ts`:
-
-```ts
-import type { CalibrationProfile, PoseFrame, PoseLandmark } from "./types";
-
-function visible(point: PoseLandmark | undefined): point is PoseLandmark {
-  return Boolean(point && point.visibility >= 0.6);
-}
-
-export function buildCalibrationProfile(samples: PoseFrame[]): CalibrationProfile {
-  const visibleSamples = samples.filter((sample) => visible(sample.landmarks.shoulders) && visible(sample.landmarks.hips));
-  const standing = visibleSamples[0];
-  const squat = visibleSamples.reduce((lowest, sample) => {
-    const currentY = sample.landmarks.hips?.y ?? 0;
-    const lowestY = lowest.landmarks.hips?.y ?? 0;
-    return currentY > lowestY ? sample : lowest;
-  }, visibleSamples[0] ?? samples[0]);
-
-  const leftWrist = standing?.landmarks.leftWrist;
-  const rightWrist = standing?.landmarks.rightWrist;
-  const armSpan = visible(leftWrist) && visible(rightWrist) ? Math.abs(rightWrist.x - leftWrist.x) : 0;
-  const standingHipY = standing?.landmarks.hips?.y ?? 0;
-  const naturalSquatHipY = squat?.landmarks.hips?.y ?? standingHipY;
-
-  return {
-    shoulderWidth: Math.max(0.18, armSpan * 0.3),
-    armSpan,
-    standingHipY,
-    naturalSquatHipY,
-    bodyScale: Math.max(0.1, naturalSquatHipY - (standing?.landmarks.shoulders?.y ?? 0)),
-    fullBodyVisible: visibleSamples.length > 0 && armSpan > 0.4,
-  };
-}
-
-export function getCalibrationGuidance(profile: CalibrationProfile): string[] {
-  const guidance: string[] = [];
-  if (!profile.fullBodyVisible) guidance.push("Stand fully in frame.");
-  if (profile.armSpan < 0.4) guidance.push("Step back from the camera.");
-  if (profile.naturalSquatHipY <= profile.standingHipY) guidance.push("Do one natural squat.");
-  return guidance;
-}
-```
-
-- [ ] **Step 3: Write calibration UI test**
-
-Create `src/components/CalibrationStep.test.tsx`:
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { CalibrationStep } from "./CalibrationStep";
-
-describe("CalibrationStep", () => {
-  it("completes the short calibration flow", async () => {
-    const onComplete = vi.fn();
-    render(<CalibrationStep onComplete={onComplete} />);
-
-    expect(screen.getByText(/stand fully in frame/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /use demo calibration/i }));
-
-    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ fullBodyVisible: true }));
-  });
+it("allows one optional action per beat", () => {
+  const opened = updateBeat(chart, "b2", { action: "open" });
+  expect(updateBeat(opened, "b2", { action: "squat" })[1].action).toBe("squat");
 });
-```
+~~~
 
-- [ ] **Step 4: Implement calibration UI**
+加入 120 BPM 不输出成 240 BPM 密度、Worker abort 清理 pending 请求的测试。
 
-Create `src/components/CalibrationStep.tsx`:
+- [ ] **Step 2: 运行并确认 RED**
 
-```tsx
-import { buildCalibrationProfile } from "../domain/calibration";
-import type { CalibrationProfile, PoseFrame } from "../domain/types";
+Run: npm.cmd test -- src/beat-analysis src/chart
+Expected: FAIL，模块不存在。
 
-interface CalibrationStepProps {
-  onComplete(profile: CalibrationProfile): void;
-}
+- [ ] **Step 3: 实现算法端口与 Worker**
 
-const demoSamples: PoseFrame[] = [
-  {
-    timestampSec: 0,
-    landmarks: {
-      shoulders: { x: 0.5, y: 0.25, visibility: 0.95 },
-      hips: { x: 0.5, y: 0.52, visibility: 0.95 },
-      leftWrist: { x: 0.12, y: 0.28, visibility: 0.95 },
-      rightWrist: { x: 0.88, y: 0.28, visibility: 0.95 },
-    },
-  },
-  {
-    timestampSec: 1,
-    landmarks: {
-      shoulders: { x: 0.5, y: 0.25, visibility: 0.95 },
-      hips: { x: 0.5, y: 0.72, visibility: 0.95 },
-      leftWrist: { x: 0.13, y: 0.3, visibility: 0.95 },
-      rightWrist: { x: 0.87, y: 0.3, visibility: 0.95 },
-    },
-  },
-];
+musicTempoAdapter.ts 是唯一 import music-tempo 的文件。输出统一为秒；按短时 RMS/onset 差、显著度中位数和最小间距筛选。Worker 协议固定为 AnalyzeRequest、AnalyzeSuccess、AnalyzeFailure，以 transferable 传 PCM；abort 和卸载清理请求。
 
-export function CalibrationStep({ onComplete }: CalibrationStepProps) {
-  function completeDemoCalibration() {
-    onComplete(buildCalibrationProfile(demoSamples));
-  }
+- [ ] **Step 4: 实现谱面界面**
 
-  return (
-    <section className="step-panel">
-      <p className="eyebrow">Step 3</p>
-      <h1>Calibrate your space</h1>
-      <ol className="calibration-list">
-        <li>Stand fully in frame.</li>
-        <li>Hold a neutral pose.</li>
-        <li>Open both arms.</li>
-        <li>Do one natural squat.</li>
-      </ol>
-      <button className="primary-button" onClick={completeDemoCalibration}>Use demo calibration</button>
-    </section>
-  );
-}
-```
+每拍提供删除、只卡节奏、打开、蹲低；点击按 video.currentTime 试听。固定提示：“动作标记是你希望自己在该拍完成的状态，不是系统识别原视频动作。”
 
-- [ ] **Step 5: Wire calibration into App**
+- [ ] **Step 5: 验证并提交**
 
-Modify `src/App.tsx` to store `CalibrationProfile` and move to challenge:
+Run: npm.cmd test -- src/beat-analysis src/chart src/components/ChartEditor.test.tsx
+Run: npm.cmd run build
 
-```tsx
-import { useState } from "react";
-import { CalibrationStep } from "./components/CalibrationStep";
-import { CheckpointConfirmStep } from "./components/CheckpointConfirmStep";
-import { UploadStep } from "./components/UploadStep";
-import { generateChallenge } from "./domain/challengeGenerator";
-import type { CalibrationProfile, Checkpoint, VideoAsset } from "./domain/types";
-
-type Step = "upload" | "confirm" | "calibration" | "challenge";
-
-export function App() {
-  const [step, setStep] = useState<Step>("upload");
-  const [video, setVideo] = useState<VideoAsset | null>(null);
-  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
-  const [calibration, setCalibration] = useState<CalibrationProfile | null>(null);
-
-  function handleVideoReady(asset: VideoAsset) {
-    setVideo(asset);
-    setCheckpoints(generateChallenge(asset));
-    setStep("confirm");
-  }
-
-  function handleConfirm(confirmed: Checkpoint[]) {
-    setCheckpoints(confirmed);
-    setStep("calibration");
-  }
-
-  function handleCalibrationComplete(profile: CalibrationProfile) {
-    setCalibration(profile);
-    setStep("challenge");
-  }
-
-  return (
-    <main className="app-shell">
-      {step === "upload" ? <UploadStep onVideoReady={handleVideoReady} /> : null}
-      {step === "confirm" && video ? <CheckpointConfirmStep video={video} checkpoints={checkpoints} onConfirm={handleConfirm} /> : null}
-      {step === "calibration" ? <CalibrationStep onComplete={handleCalibrationComplete} /> : null}
-      {step === "challenge" && calibration ? <section className="step-panel"><h1>Challenge ready</h1></section> : null}
-    </main>
-  );
-}
-```
-
-- [ ] **Step 6: Run tests and commit**
-
-Run: `npm test -- src/domain/calibration.test.ts src/components/CalibrationStep.test.tsx src/App.test.tsx`
-
-Expected: PASS with all listed tests passing.
-
-```bash
-git add src/domain/calibration.ts src/domain/calibration.test.ts src/components/CalibrationStep.tsx src/components/CalibrationStep.test.tsx src/App.tsx
-git commit -m "feat: add adaptive body calibration"
-```
+~~~powershell
+git add package.json package-lock.json src/beat-analysis src/chart src/components/ChartEditor*
+git commit -m "feat: generate and confirm a lightweight beat chart"
+~~~
 
 ---
 
-### Task 5: Timing And Pose Judging
+# Phase 3：姿态指标与自动校准
+
+### Task 5: 姿态质量和纯运动指标
 
 **Files:**
-- Create: `src/domain/judging.ts`
-- Create: `src/domain/judging.test.ts`
+- Create: src/pose/poseQuality.ts
+- Test: src/pose/poseQuality.test.ts
+- Create: src/motion/geometry.ts
+- Create: src/motion/poseMetrics.ts
+- Test: src/motion/poseMetrics.test.ts
+- Create: src/test/fixtures/poseFrames.ts
 
 **Interfaces:**
-- Consumes: `Checkpoint`, `CalibrationProfile`, `PoseFrame`, `HitResult`
-- Produces: `judgeCheckpoint(checkpoint: Checkpoint, poseFrame: PoseFrame, calibration: CalibrationProfile): HitResult`
-- Produces: `judgeTiming(deltaMs: number, timingWindowMs: number): TimingJudgment`
+- Produces: classifyPose(frame): "no-pose" | "partial-body" | "full-body"
+- Produces: elbowAngle(frame, side): Reliable<number>
+- Produces: hipHeight(frame): Reliable<number>
+- Produces: bodyScale(frame): Reliable<number>
+- Produces: normalizedBodySpeed(previous, current): Reliable<number>
 
-- [ ] **Step 1: Write judging tests**
+- [ ] **Step 1: 写无图像夹具测试**
 
-Create `src/domain/judging.test.ts`:
+覆盖完整站立、一侧遮挡、双臂遮挡、左臂 174°、右臂 130°、髋部下降和脚踝出框。低置信指标返回 { kind: "unjudgeable" }，不能返回 0 或失败。
 
-```ts
-import { describe, expect, it } from "vitest";
-import { fixtureCalibration, fixtureCheckpoint, fixturePoseFrame } from "../test/fixtures";
-import { judgeCheckpoint, judgeTiming } from "./judging";
+- [ ] **Step 2: 运行并确认 RED**
 
-describe("judgeTiming", () => {
-  it.each([
-    [20, "Perfect"],
-    [80, "Great"],
-    [-90, "Early"],
-    [160, "Late"],
-    [280, "Miss"],
-  ] as const)("judges %sms as %s", (deltaMs, expected) => {
-    expect(judgeTiming(deltaMs, 120)).toBe(expected);
-  });
-});
+Run: npm.cmd test -- src/pose/poseQuality.test.ts src/motion/poseMetrics.test.ts
 
-describe("judgeCheckpoint", () => {
-  it("uses relative arm extension for pose lock", () => {
-    const result = judgeCheckpoint(fixtureCheckpoint, fixturePoseFrame, fixtureCalibration);
+- [ ] **Step 3: 实现几何与归一化**
 
-    expect(result.pose).toBe("Pose Lock");
-    expect(result.timing).toBe("Great");
-    expect(result.score).toBeGreaterThan(0);
-  });
+肘角使用肩—肘与腕—肘向量夹角；bodyScale 使用肩中点到踝中点距离；速度取可靠躯干和四肢关键点位移中位数，除以 bodyScale 和时间差。除法前检查尺度、时间差和置信度。
 
-  it("marks off shape when arm extension is below calibrated threshold", () => {
-    const result = judgeCheckpoint(
-      fixtureCheckpoint,
-      {
-        ...fixturePoseFrame,
-        landmarks: {
-          ...fixturePoseFrame.landmarks,
-          rightWrist: { x: 0.6, y: 0.3, visibility: 0.95 },
-        },
-      },
-      fixtureCalibration,
-    );
+- [ ] **Step 4: 验证并提交**
 
-    expect(result.pose).toBe("Off Shape");
-    expect(result.message).toBe("Arm not open");
-  });
-});
-```
+Run: npm.cmd test -- src/pose src/motion
 
-- [ ] **Step 2: Implement judging**
+~~~powershell
+git add src/pose/poseQuality* src/motion src/test/fixtures
+git commit -m "feat: derive reliable normalized pose metrics"
+~~~
 
-Create `src/domain/judging.ts`:
-
-```ts
-import type { CalibrationProfile, Checkpoint, HitResult, PoseFrame, PoseJudgment, TimingJudgment } from "./types";
-
-export function judgeTiming(deltaMs: number, timingWindowMs: number): TimingJudgment {
-  const absolute = Math.abs(deltaMs);
-  if (absolute <= timingWindowMs * 0.35) return "Perfect";
-  if (absolute <= timingWindowMs) return "Great";
-  if (absolute <= timingWindowMs * 1.75) return deltaMs < 0 ? "Early" : "Late";
-  return "Miss";
-}
-
-export function judgeCheckpoint(
-  checkpoint: Checkpoint,
-  poseFrame: PoseFrame,
-  calibration: CalibrationProfile,
-): HitResult {
-  const deltaMs = Math.round((poseFrame.timestampSec - checkpoint.time) * 1000);
-  const timing = judgeTiming(deltaMs, checkpoint.timingWindowMs);
-  const pose = judgePose(checkpoint, poseFrame, calibration);
-  const timingScore = timing === "Perfect" ? 100 : timing === "Great" ? 80 : timing === "Early" || timing === "Late" ? 45 : 0;
-  const poseScore = pose === "Pose Lock" ? 100 : pose === "Loose" ? 60 : 0;
-  const score = Math.round((timingScore * 0.55 + poseScore * 0.45) * strictnessMultiplier(checkpoint.strictness));
-
-  return {
-    checkpointId: checkpoint.id,
-    timing,
-    pose,
-    deltaMs,
-    score,
-    message: pose === "Pose Lock" ? checkpoint.feedback.hit : checkpoint.feedback.miss,
-  };
-}
-
-function judgePose(checkpoint: Checkpoint, poseFrame: PoseFrame, calibration: CalibrationProfile): PoseJudgment {
-  if (checkpoint.intent === "squat") {
-    const hipY = poseFrame.landmarks.hips?.y ?? calibration.standingHipY;
-    const requiredY = calibration.standingHipY + (calibration.naturalSquatHipY - calibration.standingHipY) * 0.75;
-    if (hipY >= requiredY) return "Pose Lock";
-    if (hipY >= requiredY - 0.05) return "Loose";
-    return "Off Shape";
-  }
-
-  if (checkpoint.intent === "extension") {
-    const shoulder = poseFrame.landmarks.shoulders;
-    const wrist = poseFrame.landmarks.rightWrist ?? poseFrame.landmarks.leftWrist;
-    if (!shoulder || !wrist) return "Off Shape";
-    const reach = Math.abs(wrist.x - shoulder.x);
-    const ratio = reach / calibration.armSpan;
-    if (ratio >= 0.45) return "Pose Lock";
-    if (ratio >= 0.34) return "Loose";
-    return "Off Shape";
-  }
-
-  return timingPoseFallback(poseFrame);
-}
-
-function timingPoseFallback(poseFrame: PoseFrame): PoseJudgment {
-  return poseFrame.landmarks.shoulders && poseFrame.landmarks.hips ? "Pose Lock" : "Off Shape";
-}
-
-function strictnessMultiplier(strictness: Checkpoint["strictness"]): number {
-  if (strictness === "loose") return 1.05;
-  if (strictness === "strict") return 0.95;
-  return 1;
-}
-```
-
-- [ ] **Step 3: Run tests and commit**
-
-Run: `npm test -- src/domain/judging.test.ts`
-
-Expected: PASS with all judging tests passing.
-
-```bash
-git add src/domain/judging.ts src/domain/judging.test.ts
-git commit -m "feat: add relative timing and pose judging"
-```
-
----
-
-### Task 6: Scoring, Combo, Fever, And Weak Sections
+### Task 6: 完整校准与 2 秒复核
 
 **Files:**
-- Create: `src/domain/scoring.ts`
-- Create: `src/domain/scoring.test.ts`
+- Create: src/calibration/stableSamples.ts
+- Create: src/calibration/fullCalibration.ts
+- Test: src/calibration/fullCalibration.test.ts
+- Create: src/calibration/retryVerification.ts
+- Test: src/calibration/retryVerification.test.ts
+- Create: src/components/CalibrationStep.tsx
+- Test: src/components/CalibrationStep.test.tsx
 
 **Interfaces:**
-- Consumes: `HitResult`, `RunSummary`
-- Produces: `calculateRunSummary(results: HitResult[]): RunSummary`
-- Produces: `calculateCombo(results: HitResult[]): number`
-- Produces: `calculateEnergy(results: HitResult[]): number`
+- Produces: CalibrationController.accept(frame): CalibrationProgress
+- Produces: CalibrationController.finish(): CalibrationProfile
+- Produces: verifyRetry(frames, profile, config): "reuse" | "recalibrate"
 
-- [ ] **Step 1: Write scoring tests**
+- [ ] **Step 1: 写阶段、中位数和复核测试**
 
-Create `src/domain/scoring.test.ts`:
-
-```ts
-import { describe, expect, it } from "vitest";
-import type { HitResult } from "./types";
-import { calculateCombo, calculateEnergy, calculateRunSummary } from "./scoring";
-
-const results: HitResult[] = [
-  { checkpointId: "cp-1", timing: "Perfect", pose: "Pose Lock", deltaMs: 10, score: 100, message: "Pose Lock" },
-  { checkpointId: "cp-2", timing: "Great", pose: "Pose Lock", deltaMs: 60, score: 89, message: "Pose Lock" },
-  { checkpointId: "cp-3", timing: "Late", pose: "Off Shape", deltaMs: 160, score: 25, message: "Go lower" },
-  { checkpointId: "cp-4", timing: "Perfect", pose: "Pose Lock", deltaMs: 20, score: 100, message: "Pose Lock" },
-];
-
-describe("scoring", () => {
-  it("calculates highest combo without misses or off-shape results", () => {
-    expect(calculateCombo(results)).toBe(2);
-  });
-
-  it("calculates capped energy", () => {
-    expect(calculateEnergy(results)).toBe(78);
-  });
-
-  it("summarizes the run for the result card", () => {
-    const summary = calculateRunSummary(results);
-
-    expect(summary.grade).toBe("B");
-    expect(summary.highestCombo).toBe(2);
-    expect(summary.timingAccuracy).toBe(75);
-    expect(summary.frameworkHitRate).toBe(75);
-    expect(summary.bestSectionLabel).toBe("Checkpoints 1-2");
-    expect(summary.weakestSectionLabel).toBe("Checkpoints 3-4");
-  });
+~~~ts
+it("skips squat when chart has no squat beat", () => {
+  const controller = createCalibrationController({ chartHasSquat: false, config });
+  feedStableNeutralAndStraightArms(controller);
+  expect(controller.finish().squatDepth).toBeNull();
 });
-```
+it("reuses calibration for small variation", () => {
+  expect(verifyRetry(similarNeutralFrames(), profile, config)).toBe("reuse");
+});
+it("recalibrates after clear scale change", () => {
+  expect(verifyRetry(changedScaleFrames(), profile, config)).toBe("recalibrate");
+});
+~~~
 
-- [ ] **Step 2: Implement scoring**
+- [ ] **Step 2: 运行并确认 RED**
 
-Create `src/domain/scoring.ts`:
+Run: npm.cmd test -- src/calibration
+Expected: FAIL，校准模块不存在。
 
-```ts
-import type { HitResult, RunSummary } from "./types";
+- [ ] **Step 3: 实现 6–8 秒自动采集**
 
-export function calculateCombo(results: HitResult[]): number {
-  let current = 0;
-  let best = 0;
+状态顺序：full-body、neutral、straight-arms、conditional-squat、complete。neutral 记录尺度、中心、肩髋宽、躯干和四肢比例、站立髋高；straight-arms 分别记录左右个人伸直角；仅谱面含 squat 时记录主动下蹲深度。只接受连续稳定可靠帧，以中位数生成 profile。
 
-  for (const result of results) {
-    if (result.timing !== "Miss" && result.pose !== "Off Shape") {
-      current += 1;
-      best = Math.max(best, current);
-    } else {
-      current = 0;
-    }
-  }
+- [ ] **Step 4: 实现 2 秒机位签名**
 
-  return best;
-}
+自然站立约 2000ms；比较全身可见度、尺度中位数、中心、四肢比例和机位签名。关键部位持续不可见或任一指标超出集中容差即 recalibrate。
 
-export function calculateEnergy(results: HitResult[]): number {
-  if (results.length === 0) return 0;
-  return Math.min(100, Math.round(results.reduce((sum, result) => sum + result.score, 0) / results.length));
-}
+- [ ] **Step 5: 实现无需远程点击的 UI**
 
-export function calculateRunSummary(results: HitResult[]): RunSummary {
-  const totalScore = calculateEnergy(results);
-  const timingHits = results.filter((result) => result.timing === "Perfect" || result.timing === "Great").length;
-  const frameworkHits = results.filter((result) => result.pose === "Pose Lock").length;
+以语音、动画和倒计时自动推进；不提供身高、臂长或角度输入框。全身不完整时只提示调整距离或机位。
 
-  return {
-    grade: gradeFromScore(totalScore),
-    totalScore,
-    highestCombo: calculateCombo(results),
-    timingAccuracy: Math.round((timingHits / Math.max(1, results.length)) * 100),
-    frameworkHitRate: Math.round((frameworkHits / Math.max(1, results.length)) * 100),
-    bestSectionLabel: sectionLabel(results, "best"),
-    weakestSectionLabel: sectionLabel(results, "weakest"),
-  };
-}
+- [ ] **Step 6: 验证并提交**
 
-function gradeFromScore(score: number): RunSummary["grade"] {
-  if (score >= 92) return "S";
-  if (score >= 82) return "A";
-  if (score >= 70) return "B";
-  return "C";
-}
+Run: npm.cmd test -- src/calibration src/components/CalibrationStep.test.tsx
 
-function sectionLabel(results: HitResult[], mode: "best" | "weakest"): string {
-  if (results.length <= 2) return "Full challenge";
-  const windows = [];
-  for (let index = 0; index < results.length - 1; index += 1) {
-    const pair = results.slice(index, index + 2);
-    const average = pair.reduce((sum, result) => sum + result.score, 0) / pair.length;
-    windows.push({ index, average });
-  }
-  const selected = windows.reduce((chosen, item) => {
-    return mode === "best"
-      ? item.average > chosen.average ? item : chosen
-      : item.average < chosen.average ? item : chosen;
-  }, windows[0]);
-
-  return `Checkpoints ${selected.index + 1}-${selected.index + 2}`;
-}
-```
-
-- [ ] **Step 3: Run tests and commit**
-
-Run: `npm test -- src/domain/scoring.test.ts`
-
-Expected: PASS with all scoring tests passing.
-
-```bash
-git add src/domain/scoring.ts src/domain/scoring.test.ts
-git commit -m "feat: add run scoring and weak section logic"
-```
+~~~powershell
+git add src/calibration src/components/CalibrationStep*
+git commit -m "feat: calibrate body and verify retry setup"
+~~~
 
 ---
 
-### Task 7: Gameplay Screen
+# Phase 4：双层判定与计分
+
+### Task 7: 动作落点与一对一节奏匹配
 
 **Files:**
-- Create: `src/services/poseProvider.ts`
-- Create: `src/services/webcam.ts`
-- Create: `src/components/ChallengeStep.tsx`
-- Create: `src/components/ChallengeStep.test.tsx`
-- Modify: `src/App.tsx`
-- Modify: `src/styles.css`
+- Create: src/motion/endpointDetector.ts
+- Test: src/motion/endpointDetector.test.ts
+- Create: src/judging/timing.ts
+- Test: src/judging/timing.test.ts
 
 **Interfaces:**
-- Consumes: `VideoAsset`, `Checkpoint`, `CalibrationProfile`, `HitResult`
-- Consumes: `judgeCheckpoint(checkpoint, poseFrame, calibration)`
-- Produces: `createDemoPoseFrame(checkpoint: Checkpoint): PoseFrame`
-- Produces: `ChallengeStep(props: { video: VideoAsset; checkpoints: Checkpoint[]; calibration: CalibrationProfile; onComplete(results: HitResult[]): void }): JSX.Element`
+- Produces: detectMotionEndpoints(samples, config): MotionEndpoint[]
+- Produces: matchEndpointsToBeats(beats, endpoints, windows): BeatJudgement[]
+- 一个 MotionEndpoint 最多消费一次。
 
-- [ ] **Step 1: Write ChallengeStep test**
+- [ ] **Step 1: 写落点和时间戳测试**
 
-Create `src/components/ChallengeStep.test.tsx`:
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { fixtureCalibration, fixtureCheckpoint, fixtureVideo } from "../test/fixtures";
-import { ChallengeStep } from "./ChallengeStep";
-
-describe("ChallengeStep", () => {
-  it("plays checkpoint hits and completes with results", async () => {
-    const onComplete = vi.fn();
-    render(
-      <ChallengeStep
-        video={fixtureVideo}
-        checkpoints={[fixtureCheckpoint]}
-        calibration={fixtureCalibration}
-        onComplete={onComplete}
-      />,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: /start challenge/i }));
-    expect(screen.getByText(/pose lock/i)).toBeInTheDocument();
-    expect(screen.getByText(/combo 1/i)).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /finish run/i }));
-    expect(onComplete).toHaveBeenCalledWith([expect.objectContaining({ checkpointId: "cp-1" })]);
-  });
+~~~ts
+it("matches one endpoint only once", () => {
+  const result = matchEndpointsToBeats(beatsAt([1, 1.12]), endpointsAt([1.08]), windows);
+  expect(result.filter((x) => x.grade !== "miss")).toHaveLength(1);
 });
-```
+it("uses capture time", () => {
+  const point = endpointAt({ captureTimeSec: 2.09, completedAtSec: 2.7 });
+  expect(judgeDelta(beatAt(2), point)).toBe("perfect");
+});
+~~~
 
-- [ ] **Step 2: Implement pose and webcam services**
+- [ ] **Step 2: 运行并确认 RED**
 
-Create `src/services/poseProvider.ts`:
+Run: npm.cmd test -- src/motion/endpointDetector.test.ts src/judging/timing.test.ts
 
-```ts
-import type { Checkpoint, PoseFrame } from "../domain/types";
+- [ ] **Step 3: 实现检测与匹配**
 
-export function createDemoPoseFrame(checkpoint: Checkpoint): PoseFrame {
-  return {
-    timestampSec: checkpoint.time + 0.04,
-    landmarks: {
-      shoulders: { x: 0.5, y: 0.28, visibility: 0.95 },
-      hips: { x: 0.5, y: checkpoint.intent === "squat" ? 0.7 : 0.52, visibility: 0.95 },
-      rightWrist: { x: 0.86, y: 0.3, visibility: 0.95 },
-      rightElbow: { x: 0.68, y: 0.29, visibility: 0.95 },
-      rightArm: { x: 0.77, y: 0.3, visibility: 0.95 },
-    },
-  };
-}
-```
+以归一化速度局部极小值、足够前置运动量或明显转向形成候选，加 refractory window 防抖。按绝对时间差从小到大一对一分配，输出 Perfect、Great、Early、Late、Miss。
 
-Create `src/services/webcam.ts`:
+- [ ] **Step 4: 验证并提交**
 
-```ts
-export async function startWebcam(): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    video: { width: 1280, height: 720, facingMode: "user" },
-    audio: false,
-  });
-}
+Run: npm.cmd test -- src/motion/endpointDetector.test.ts src/judging/timing.test.ts
 
-export function stopWebcam(stream: MediaStream): void {
-  stream.getTracks().forEach((track) => track.stop());
-}
-```
+~~~powershell
+git add src/motion/endpointDetector* src/judging/timing*
+git commit -m "feat: judge rhythm from motion endpoints"
+~~~
 
-- [ ] **Step 3: Implement gameplay component**
-
-Create `src/components/ChallengeStep.tsx`:
-
-```tsx
-import { useMemo, useState } from "react";
-import { judgeCheckpoint } from "../domain/judging";
-import { calculateCombo, calculateEnergy } from "../domain/scoring";
-import type { CalibrationProfile, Checkpoint, HitResult, VideoAsset } from "../domain/types";
-import { createDemoPoseFrame } from "../services/poseProvider";
-
-interface ChallengeStepProps {
-  video: VideoAsset;
-  checkpoints: Checkpoint[];
-  calibration: CalibrationProfile;
-  onComplete(results: HitResult[]): void;
-}
-
-export function ChallengeStep({ video, checkpoints, calibration, onComplete }: ChallengeStepProps) {
-  const [results, setResults] = useState<HitResult[]>([]);
-  const [started, setStarted] = useState(false);
-  const combo = useMemo(() => calculateCombo(results), [results]);
-  const energy = useMemo(() => calculateEnergy(results), [results]);
-  const latest = results.at(-1);
-
-  function startChallenge() {
-    setStarted(true);
-    setResults(checkpoints.map((checkpoint) => judgeCheckpoint(checkpoint, createDemoPoseFrame(checkpoint), calibration)));
-  }
-
-  return (
-    <section className="challenge-stage">
-      <div className="video-panel">
-        <video src={video.url} controls aria-label="Reference dance video" />
-      </div>
-      <div className="hud-panel">
-        <p className="eyebrow">Step 4</p>
-        <h1>Hit the stage</h1>
-        <div className="judgment-burst">{latest?.pose ?? "Ready"}</div>
-        <div className="stat-grid">
-          <strong>Combo {combo}</strong>
-          <strong>Energy {energy}</strong>
-          <strong>{latest?.timing ?? "Waiting"}</strong>
-        </div>
-        <div className={energy >= 85 ? "fever-meter fever-meter-on" : "fever-meter"}>
-          <span style={{ width: `${energy}%` }} />
-        </div>
-        {!started ? <button className="primary-button" onClick={startChallenge}>Start challenge</button> : null}
-        {started ? <button className="primary-button" onClick={() => onComplete(results)}>Finish run</button> : null}
-      </div>
-    </section>
-  );
-}
-```
-
-- [ ] **Step 4: Wire ChallengeStep into App**
-
-Modify the challenge branch in `src/App.tsx`:
-
-```tsx
-import { ChallengeStep } from "./components/ChallengeStep";
-import type { CalibrationProfile, Checkpoint, HitResult, VideoAsset } from "./domain/types";
-```
-
-Add state:
-
-```tsx
-const [results, setResults] = useState<HitResult[]>([]);
-```
-
-Add handler:
-
-```tsx
-function handleChallengeComplete(runResults: HitResult[]) {
-  setResults(runResults);
-  setStep("result");
-}
-```
-
-Set `Step` to include `"result"`, and render:
-
-```tsx
-{step === "challenge" && video && calibration ? (
-  <ChallengeStep video={video} checkpoints={checkpoints} calibration={calibration} onComplete={handleChallengeComplete} />
-) : null}
-{step === "result" ? <section className="step-panel"><h1>Result ready</h1><p>{results.length} hits recorded.</p></section> : null}
-```
-
-- [ ] **Step 5: Add gameplay CSS**
-
-Append to `src/styles.css`:
-
-```css
-.challenge-stage {
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.6fr);
-  gap: 24px;
-  min-height: calc(100vh - 64px);
-  align-items: center;
-}
-
-.video-panel video {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-}
-
-.hud-panel,
-.step-panel {
-  padding: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(10, 12, 20, 0.82);
-  border-radius: 8px;
-}
-
-.judgment-burst {
-  min-height: 96px;
-  display: grid;
-  place-items: center;
-  color: #ffffff;
-  background: linear-gradient(135deg, #ff2d55, #00d1ff);
-  font-size: 36px;
-  font-weight: 900;
-  border-radius: 8px;
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 16px 0;
-}
-
-.fever-meter {
-  height: 14px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-}
-
-.fever-meter span {
-  display: block;
-  height: 100%;
-  background: #64e3ff;
-}
-
-.fever-meter-on span {
-  background: #ffdd33;
-}
-```
-
-- [ ] **Step 6: Run tests and commit**
-
-Run: `npm test -- src/components/ChallengeStep.test.tsx src/domain/judging.test.ts src/domain/scoring.test.ts`
-
-Expected: PASS with all listed tests passing.
-
-```bash
-git add src/services/poseProvider.ts src/services/webcam.ts src/components/ChallengeStep.tsx src/components/ChallengeStep.test.tsx src/App.tsx src/styles.css
-git commit -m "feat: add real-time challenge stage"
-```
-
----
-
-### Task 8: Result Card, Retry, And Weak-Section Practice
+### Task 8: open、squat、不可判定与计分
 
 **Files:**
-- Create: `src/components/ResultStep.tsx`
-- Create: `src/components/ResultStep.test.tsx`
-- Modify: `src/App.tsx`
+- Create: src/judging/actionState.ts
+- Test: src/judging/actionState.test.ts
+- Create: src/judging/judgeBeat.ts
+- Test: src/judging/judgeBeat.test.ts
+- Create: src/scoring/scoring.ts
+- Test: src/scoring/scoring.test.ts
 
 **Interfaces:**
-- Consumes: `HitResult`, `RunSummary`, `calculateRunSummary(results)`
-- Produces: `ResultStep(props: { results: HitResult[]; onRetry(): void; onPracticeWeakSection(): void }): JSX.Element`
+- Produces: judgeOpen(frames, profile, window): ActionJudgement
+- Produces: judgeSquat(frames, profile, window): ActionJudgement
+- Produces: judgeBeat(input): BeatResult
+- Produces: reduceScore(state, result, config): ScoreState
+- Produces: summarizeRun(results, score): RunSummary
 
-- [ ] **Step 1: Write result card test**
+- [ ] **Step 1: 写核心产品规则测试**
 
-Create `src/components/ResultStep.test.tsx`:
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import type { HitResult } from "../domain/types";
-import { ResultStep } from "./ResultStep";
-
-const results: HitResult[] = [
-  { checkpointId: "cp-1", timing: "Perfect", pose: "Pose Lock", deltaMs: 10, score: 100, message: "Pose Lock" },
-  { checkpointId: "cp-2", timing: "Late", pose: "Off Shape", deltaMs: 160, score: 25, message: "Go lower" },
-];
-
-describe("ResultStep", () => {
-  it("shows replay-focused result actions", async () => {
-    const onRetry = vi.fn();
-    const onPracticeWeakSection = vi.fn();
-    render(<ResultStep results={results} onRetry={onRetry} onPracticeWeakSection={onPracticeWeakSection} />);
-
-    expect(screen.getByText(/grade c/i)).toBeInTheDocument();
-    expect(screen.getByText(/highest combo/i)).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /retry full challenge/i }));
-    await userEvent.click(screen.getByRole("button", { name: /practice weak section/i }));
-
-    expect(onRetry).toHaveBeenCalled();
-    expect(onPracticeWeakSection).toHaveBeenCalled();
-  });
+~~~ts
+it("hits open when either reliable arm is straight", () => {
+  expect(judgeOpen([frame({ left: 130, right: 174 })], profile, window).grade).toBe("hit");
 });
-```
+it("accepts an arm already held straight", () => {
+  expect(judgeOpen(heldStraightFrames(), profile, window).grade).toBe("hit");
+});
+it("is unjudgeable when both arms are unreliable", () => {
+  expect(judgeOpen(occludedArms(), profile, window).grade).toBe("unjudgeable");
+});
+it("hits squat at 85 percent", () => {
+  expect(judgeSquat(framesAtSquatRatio(0.85), profile, window).grade).toBe("hit");
+});
+~~~
 
-- [ ] **Step 2: Implement result card**
+- [ ] **Step 2: 写计分独立性测试**
 
-Create `src/components/ResultStep.tsx`:
+~~~ts
+it("does not break combo on action miss", () => {
+  expect(reduceScore(scoreWithCombo(8), beatResult("great", "miss"), config).combo).toBe(9);
+});
+it("excludes unjudgeable actions from denominator", () => {
+  expect(summarizeRun([openHit(), openUnjudgeable()], emptyScore()).actionCompletionRate).toBe(100);
+});
+~~~
 
-```tsx
-import { calculateRunSummary } from "../domain/scoring";
-import type { HitResult } from "../domain/types";
+- [ ] **Step 3: 运行并确认 RED**
 
-interface ResultStepProps {
-  results: HitResult[];
-  onRetry(): void;
-  onPracticeWeakSection(): void;
-}
+Run: npm.cmd test -- src/judging src/scoring
 
-export function ResultStep({ results, onRetry, onPracticeWeakSection }: ResultStepProps) {
-  const summary = calculateRunSummary(results);
+- [ ] **Step 4: 实现动作状态**
 
-  return (
-    <section className="step-panel result-card">
-      <p className="eyebrow">Result</p>
-      <h1>Grade {summary.grade}</h1>
-      <div className="stat-grid">
-        <strong>Score {summary.totalScore}</strong>
-        <strong>Highest combo {summary.highestCombo}</strong>
-        <strong>Timing {summary.timingAccuracy}%</strong>
-        <strong>Framework {summary.frameworkHitRate}%</strong>
-      </div>
-      <p>Best section: {summary.bestSectionLabel}</p>
-      <p>Weak section: {summary.weakestSectionLabel}</p>
-      <div className="action-row">
-        <button className="primary-button" onClick={onRetry}>Retry full challenge</button>
-        <button className="secondary-button" onClick={onPracticeWeakSection}>Practice weak section</button>
-      </div>
-    </section>
-  );
-}
-```
+openThreshold(side) = profile.straightArmAngle[side] - openAngleToleranceDeg；任一可靠侧达阈值即 hit，两侧都不可用才 unjudgeable。不得检查方向、手腕距离或双臂宽度。squat 使用 (standingHipHeight - currentHipHeight) / calibratedSquatDepth，窗口最大值达到 0.85 即 hit。judgeBeat 不允许动作结果改写 timing。
 
-- [ ] **Step 3: Wire result actions into App**
+- [ ] **Step 5: 实现计分**
 
-Modify `src/App.tsx`:
+总评节奏 70%、动作 30%；仅 timing miss 清空 Combo。动作 hit 增加分数和能量；unjudgeable 不进动作分母。RunSummary 输出总评、总分、节奏准确率、动作完成率、最高 Combo、open 和 squat 命中数。
 
-```tsx
-import { ResultStep } from "./components/ResultStep";
-```
+- [ ] **Step 6: 验证并提交**
 
-Replace the result branch:
+Run: npm.cmd test -- src/judging src/scoring
 
-```tsx
-{step === "result" ? (
-  <ResultStep
-    results={results}
-    onRetry={() => setStep("challenge")}
-    onPracticeWeakSection={() => setStep("challenge")}
-  />
-) : null}
-```
-
-- [ ] **Step 4: Run tests and commit**
-
-Run: `npm test -- src/components/ResultStep.test.tsx src/domain/scoring.test.ts src/App.test.tsx`
-
-Expected: PASS with all listed tests passing.
-
-```bash
-git add src/components/ResultStep.tsx src/components/ResultStep.test.tsx src/App.tsx
-git commit -m "feat: add replay-focused result card"
-```
+~~~powershell
+git add src/judging src/scoring
+git commit -m "feat: judge and score independent action states"
+~~~
 
 ---
 
-### Task 9: End-To-End MVP Flow And Build Verification
+# Phase 5：完整游戏循环
+
+### Task 9: 会话状态机与资源生命周期
 
 **Files:**
-- Create: `tests/e2e/mvp-flow.spec.ts`
-- Modify: `src/styles.css`
-- Modify: `README.md`
+- Create: src/app/sessionReducer.ts
+- Test: src/app/sessionReducer.test.ts
+- Modify: src/app/App.tsx
 
 **Interfaces:**
-- Consumes: the complete app flow from upload through result.
-- Produces: a verified browser smoke path and local run instructions.
+- Produces: SessionState.step = upload | chart | calibrate | countdown | challenge | result | retry-check
+- Produces: sessionReducer(state, event): SessionState
 
-- [ ] **Step 1: Write E2E smoke test**
+- [ ] **Step 1: 写正常、重试和清理测试**
 
-Create `tests/e2e/mvp-flow.spec.ts`:
-
-```ts
-import { expect, test } from "@playwright/test";
-
-test("user can move through the MVP dance challenge flow", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: /create your dance challenge/i })).toBeVisible();
-
-  const fileChooserPromise = page.waitForEvent("filechooser");
-  await page.getByText(/upload a local dance video/i).click();
-  const fileChooser = await fileChooserPromise;
-  await fileChooser.setFiles({
-    name: "practice.mp4",
-    mimeType: "video/mp4",
-    buffer: Buffer.from("demo"),
-  });
-
-  await expect(page.getByRole("heading", { name: /quick challenge generated/i })).toBeVisible();
-  await page.getByRole("button", { name: /start calibration/i }).click();
-
-  await expect(page.getByRole("heading", { name: /calibrate your space/i })).toBeVisible();
-  await page.getByRole("button", { name: /use demo calibration/i }).click();
-
-  await expect(page.getByRole("heading", { name: /hit the stage/i })).toBeVisible();
-  await page.getByRole("button", { name: /start challenge/i }).click();
-  await expect(page.getByText(/combo/i)).toBeVisible();
-  await page.getByRole("button", { name: /finish run/i }).click();
-
-  await expect(page.getByRole("heading", { name: /grade/i })).toBeVisible();
-  await expect(page.getByRole("button", { name: /retry full challenge/i })).toBeVisible();
-  await expect(page.getByRole("button", { name: /practice weak section/i })).toBeVisible();
+~~~ts
+it("routes retry through retry-check", () => {
+  expect(sessionReducer(resultState(), { type: "RETRY_REQUESTED" }).step).toBe("retry-check");
 });
-```
+it("returns to calibration only after changed setup", () => {
+  const event = { type: "RETRY_CHECKED", outcome: "recalibrate" } as const;
+  expect(sessionReducer(retryState(), event).step).toBe("calibrate");
+});
+~~~
 
-- [ ] **Step 2: Add responsive polish**
+- [ ] **Step 2: 运行并确认 RED**
 
-Append to `src/styles.css`:
+Run: npm.cmd test -- src/app/sessionReducer.test.ts
 
-```css
-.primary-button,
-.secondary-button {
-  min-height: 44px;
-  border: 0;
-  border-radius: 8px;
-  padding: 0 18px;
-  color: #071014;
-  font-weight: 800;
-  cursor: pointer;
+- [ ] **Step 3: 实现显式事件**
+
+事件：VIDEO_READY、BEATS_READY、CHART_CONFIRMED、CALIBRATION_READY、COUNTDOWN_FINISHED、BEAT_JUDGED、CHALLENGE_FINISHED、RETRY_REQUESTED、RETRY_CHECKED、RESET。RESET 和卸载必须释放对象地址、Worker、摄像头轨道、Landmarker、音频上下文和动画回调。
+
+- [ ] **Step 4: 验证并提交**
+
+Run: npm.cmd test -- src/app/sessionReducer.test.ts
+
+~~~powershell
+git add src/app
+git commit -m "feat: orchestrate dance session lifecycle"
+~~~
+
+### Task 10: 挑战反馈、战绩卡和再来一局
+
+**Files:**
+- Create: src/components/ChallengeStep.tsx
+- Test: src/components/ChallengeStep.test.tsx
+- Create: src/components/ResultStep.tsx
+- Test: src/components/ResultStep.test.tsx
+- Create: src/render/feedbackCanvas.ts
+- Test: src/render/feedbackCanvas.test.ts
+- Modify: src/app/App.tsx
+- Modify: src/styles.css
+
+**Interfaces:**
+- ChallengeStep produces: onFinished(results, score): void
+- ResultStep consumes: RunSummary、RETRY_REQUESTED、RESET。
+
+- [ ] **Step 1: 写反馈优先级测试**
+
+~~~ts
+it("shows action success over timing success", () => {
+  renderChallengeWith(beatResult("perfect", "hit", "open"));
+  expect(screen.getByText("FULL OUT")).toBeVisible();
+  expect(screen.queryByText("Perfect")).not.toBeInTheDocument();
+});
+it("shows camera guidance for unjudgeable action", () => {
+  renderChallengeWith(beatResult("great", "unjudgeable", "open"));
+  expect(screen.getByText("保持全身入镜")).toBeVisible();
+});
+~~~
+
+- [ ] **Step 2: 写战绩卡测试**
+
+断言总评、总分、节奏准确率、动作完成率、最高 Combo、open/squat 命中数和“再来一局”；不展示规格未定义的乐句或分段分析。
+
+- [ ] **Step 3: 运行并确认 RED**
+
+Run: npm.cmd test -- src/components/ChallengeStep.test.tsx src/components/ResultStep.test.tsx
+
+- [ ] **Step 4: 实现单时钟挑战**
+
+video.currentTime 是唯一时钟；每拍超过 Late 窗口后只结算一次。主反馈优先级：动作命中、节奏评价、动作轻提示、机位提示；负面提示按 feedbackCooldownMs 限流。Canvas 2D 绘制骨架、冲击圈和少量粒子；掉帧先关粒子，再降骨架刷新率，不改变判定窗口。
+
+- [ ] **Step 5: 接通战绩和重试**
+
+ResultStep 只消费 RunSummary。再来一局保留视频、谱面和 CalibrationProfile，进入 retry-check；reuse 清空本局结果并倒计时，recalibrate 清空旧 profile 并进入完整校准。
+
+- [ ] **Step 6: 验证并提交**
+
+Run: npm.cmd test
+Run: npm.cmd run build
+
+~~~powershell
+git add src/components src/render src/app/App.tsx src/styles.css
+git commit -m "feat: complete replayable dance challenge UI"
+~~~
+
+### Task 11: 端到端固定夹具
+
+**Files:**
+- Create: tests/e2e/fixtures/practice.mp4
+- Create: tests/e2e/mvp-flow.spec.ts
+- Create: tests/e2e/retry-flow.spec.ts
+- Create: src/test/fakes/fakeBeatAnalyzer.ts
+- Create: src/test/fakes/fakePoseProvider.ts
+
+**Interfaces:**
+- Produces: 可注入的固定 BeatAnalyzer 和 PoseProvider。
+- 验证: upload → chart → calibrate → challenge → result → retry-check。
+
+- [ ] **Step 1: 写失败的完整流程**
+
+mvp-flow 验证上传、谱面标记、条件式下蹲校准、FULL OUT、DROP LOW、节奏 Combo 和战绩。retry-flow 验证相似机位约 2 秒后直接倒计时，尺度明显变化后回到完整校准。
+
+- [ ] **Step 2: 运行并确认 RED**
+
+Run: npm.cmd run e2e -- tests/e2e/mvp-flow.spec.ts tests/e2e/retry-flow.spec.ts
+Expected: 测试注入和流程尚未接通时失败。
+
+- [ ] **Step 3: 接入测试构建依赖注入**
+
+AppDependencies 使用下列唯一签名；生产入口传真实实现，E2E 传固定实现。领域代码不得读取测试环境变量。
+
+~~~ts
+export interface AppDependencies {
+  beatAnalyzerFactory(): BeatAnalyzer;
+  poseProviderFactory(): PoseProvider;
+  audioContextFactory(): AudioContext;
+  clock: { nowMs(): number };
 }
+~~~
 
-.primary-button {
-  background: #64e3ff;
-}
+- [ ] **Step 4: 全量验证并提交**
 
-.secondary-button {
-  background: #ffdd33;
-}
+Run: npm.cmd test
+Run: npm.cmd run build
+Run: npm.cmd run e2e
+Expected: 单元、组件和 Chromium E2E 全部通过。
 
-.upload-zone {
-  display: grid;
-  gap: 12px;
-  width: min(100%, 520px);
-  padding: 24px;
-  border: 1px dashed rgba(255, 255, 255, 0.4);
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.checkpoint-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin: 20px 0;
-}
-
-.checkpoint-card {
-  display: grid;
-  gap: 8px;
-  padding: 16px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.action-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.status-line {
-  color: #64e3ff;
-}
-
-.error-line {
-  color: #ff8aa0;
-}
-
-@media (max-width: 840px) {
-  .app-shell {
-    padding: 18px;
-  }
-
-  h1 {
-    font-size: 34px;
-  }
-
-  .challenge-stage {
-    grid-template-columns: 1fr;
-  }
-
-  .stat-grid {
-    grid-template-columns: 1fr;
-  }
-}
-```
-
-- [ ] **Step 3: Add README**
-
-Create or replace `README.md`:
-
-```md
-# Dance Rhythm Game MVP
-
-A personal web-based dance rhythm practice game. Upload a local dance video, generate a quick challenge, calibrate your body and camera setup, dance with real-time feedback, and review a replay-focused result card.
-
-## Run Locally
-
-```bash
-npm install
-npm run dev
-```
-
-## Verify
-
-```bash
-npm test
-npm run build
-npm run e2e
-```
-
-## MVP Boundaries
-
-The first version focuses on personal practice. It does not include public sharing, leaderboards, multiplayer, teacher course marketplaces, or professional frame-by-frame judging.
-```
-
-- [ ] **Step 4: Run full verification**
-
-Run: `npm test`
-
-Expected: PASS with all unit and component tests passing.
-
-Run: `npm run build`
-
-Expected: exit code 0 and Vite production build output.
-
-Run: `npx playwright install chromium`
-
-Expected: Chromium browser installed or already available.
-
-Run: `npm run e2e`
-
-Expected: PASS with `mvp-flow.spec.ts` passing in Chromium.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests README.md src/styles.css
-git commit -m "test: verify full dance challenge flow"
-```
+~~~powershell
+git add src/test tests
+git commit -m "test: verify the complete dance challenge flow"
+~~~
 
 ---
 
-## Self-Review Notes
+# Phase 6：真实设备验收与公开上线
 
-- Spec coverage: Tasks cover upload, automatic challenge generation, checkpoint confirmation, body calibration, relative judging, real-time feedback, combo/energy/fever, result card, retry, and weak-section practice.
-- Scope control: The plan excludes sharing, leaderboards, multiplayer, marketplace features, professional frame-by-frame judging, and complex chart editing.
-- Type consistency: Shared types originate in `src/domain/types.ts`; later tasks consume `VideoAsset`, `Checkpoint`, `CalibrationProfile`, `PoseFrame`, `HitResult`, and `RunSummary` from that file.
-- Test coverage: Each domain module has unit tests; each major UI step has component tests; the full user loop has one Playwright smoke test.
+### Task 12: 性能、隐私和 HTTPS 静态部署
+
+**Files:**
+- Create: src/telemetry/localPerformanceLog.ts
+- Test: src/telemetry/localPerformanceLog.test.ts
+- Create: tests/e2e/privacy.spec.ts
+- Create: .github/workflows/verify-and-deploy.yml
+- Create: README.md
+- Modify: vite.config.ts
+
+**Interfaces:**
+- Produces: LocalPerformanceSnapshot，仅保存在内存。
+- Produces: dist/ 静态产物。
+
+- [ ] **Step 1: 写隐私与资源释放测试**
+
+privacy.spec.ts 监听 page.on("request")；完成上传、校准和挑战后，只允许同源静态资源，断言视频内容、摄像头帧、关键点和校准 JSON 均无出站请求。离开挑战后断言轨道 stop、Worker terminate、Landmarker close、对象地址 revoke。
+
+- [ ] **Step 2: 实现本地性能快照**
+
+记录模型档位、分辨率、推理平均/P95、有效姿态 FPS、丢帧和长任务数；不记录图像、关键点、文件名或身体数据，也不发送网络请求。
+
+- [ ] **Step 3: 配置 CI 和 GitHub Pages**
+
+pull_request 执行 npm ci、npm test、npm run build、npm run e2e；当前默认分支 master 通过后部署 dist。工作流同时声明 main，便于未来改名；Vite base 按仓库名配置，模型与 WASM 使用版本化文件名。
+
+- [ ] **Step 4: 真人验收矩阵**
+
+覆盖不同身高和四肢比例、近远机位、720p/1080p、明暗光线、集显/独显、Chrome/Edge。验证：
+1. 校准无需输入数据并在目标时长内完成。
+2. 任意单臂伸直命中，提前保持有效，双臂不可见为不可判定。
+3. squat 达 85% 命中，关键点不可见为不可判定。
+4. 节奏评价不受推理完成时间影响。
+5. 相同机位复用，明显变化重校准。
+6. 连续三局无摄像头、音频、Worker、对象地址或模型泄漏。
+
+- [ ] **Step 5: 发布前验证**
+
+Run: npm.cmd ci
+Run: npm.cmd test
+Run: npm.cmd run build
+Run: npm.cmd run e2e
+Expected: 全部退出 0；dist 含应用、Full/Lite 模型和 WASM；网络面板无用户媒体上传。
+
+- [ ] **Step 6: 提交**
+
+~~~powershell
+git add .github README.md vite.config.ts src/telemetry tests/e2e/privacy.spec.ts
+git commit -m "ci: verify and deploy fullydancy MVP"
+~~~
+
+---
+
+## 阶段闸门
+
+- Phase 1：至少一种 Pose 模型在目标设备达到 P95 ≤ 50ms，否则先调输入分辨率，不扩展功能。
+- Phase 2：真实视频能生成可快速确认的稀疏强拍谱面；半拍/双倍问题先调显著度和密度筛选。
+- Phase 3：完整校准和 2 秒复核均无需手工身体数据。
+- Phase 4：姿态序列夹具证明节奏与动作状态完全独立。
+- Phase 5：形成可重复挑战的端到端 MVP。
+- Phase 6：隐私、资源释放、真实设备和 HTTPS 部署全部通过后公开发布。
+
+## MVP 验收定义
+
+- 桌面 Chrome/Edge 可上传 15–60 秒本地视频并确认强拍。
+- 自动采集身体尺度、四肢比例、个人伸直角和条件式下蹲深度。
+- 任意一只可靠手臂在卡点窗口内伸直即 open 命中，保持状态有效。
+- 节奏落点决定 Combo；动作失败或不可判定不打断 Combo。
+- 再来一局先做约 2 秒复核，机位未变时不重复完整校准。
+- 连续三局没有摄像头、音频、Worker、对象地址或模型资源泄漏。
+- 视频、摄像头画面、关键点和校准数据没有出站请求。
+- 生产构建可通过 HTTPS 静态站点公开访问。
+
+## 执行建议
+
+按 Task 1–12 顺序执行。Task 2、4、6、7、8、11、12 是评审重点，必须检查真实设备证据或领域夹具，不能只凭 UI 演示判断通过。
