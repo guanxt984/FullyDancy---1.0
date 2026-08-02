@@ -2,7 +2,8 @@ export const GAME_CONFIG = {
   timingWindowsMs: {
     perfect: 100,
     great: 200,
-    miss: 350,
+    early: 350,
+    late: 350,
   },
   poseFps: 20,
   minimumVisibility: 0.6,
