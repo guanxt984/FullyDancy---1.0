@@ -5,6 +5,8 @@ import { App } from "./App";
 const homeTitle = "\u628a\u52a8\u4f5c\u8df3\u5f00";
 const startLabel = "\u5f00\u59cb\u6e38\u620f";
 const selectLabel = "\u9009\u62e9 8\u67083\u65e5\u821e\u8e48\u6311\u6218";
+const analysisLabel = "\u5206\u6790\u5361\u70b9";
+const preparingCopy = "\u6b63\u5728\u51c6\u5907\u5361\u70b9\u5206\u6790\u2026";
 
 describe("App", () => {
   it("moves from the game introduction to level selection", () => {
@@ -23,6 +25,16 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: selectLabel }));
 
     expect(screen.getByRole("heading", { name: "8\u67083\u65e5\u821e\u8e48\u6311\u6218" })).toBeInTheDocument();
+  });
+
+  it("acknowledges the temporary analysis action", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: startLabel }));
+    fireEvent.click(screen.getByRole("button", { name: selectLabel }));
+    fireEvent.click(screen.getByRole("button", { name: analysisLabel }));
+
+    expect(screen.getByText(preparingCopy)).toBeInTheDocument();
   });
 
   it("keeps the camera technical slice out of the formal home flow", () => {
