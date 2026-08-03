@@ -1,21 +1,30 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { BuiltInLevelStep } from "../components/BuiltInLevelStep";
+import { HomeScreen } from "../components/HomeScreen";
+import { LevelSelectScreen } from "../components/LevelSelectScreen";
 import { BUILT_IN_LEVEL } from "../levels/builtInLevel";
-import { TechnicalSlice } from "../components/TechnicalSlice";
+import type { PrototypeScreen } from "./prototypeFlow";
 
 export function App() {
-  const [isPreparingAnalysis, setIsPreparingAnalysis] = useState(false);
+  const [screen, setScreen] = useState<PrototypeScreen>("home");
 
-  return (
-    <main>
-      <h1>FullyDancy</h1>
-      <p>视频和摄像头数据仅在本地处理</p>
-      <BuiltInLevelStep
+  if (screen === "level-select") {
+    return (
+      <LevelSelectScreen
         level={BUILT_IN_LEVEL}
-        onAnalyze={() => setIsPreparingAnalysis(true)}
+        onBack={() => setScreen("home")}
+        onSelect={() => setScreen("analysis")}
       />
-      {isPreparingAnalysis ? <p>正在准备卡点分析…</p> : null}
-      <TechnicalSlice />
-    </main>
-  );
+    );
+  }
+
+  if (screen === "analysis") {
+    return (
+      <main className="analysis-preview">
+        <BuiltInLevelStep level={BUILT_IN_LEVEL} onAnalyze={() => undefined} />
+      </main>
+    );
+  }
+
+  return <HomeScreen onStart={() => setScreen("level-select")} />;
 }
