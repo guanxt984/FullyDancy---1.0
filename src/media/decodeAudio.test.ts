@@ -1,13 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import "../test/urlObjectUrl";
+﻿import { describe, expect, it } from "vitest";
 import { decodeMonoPcm } from "./decodeAudio";
 
-function fakeFile(): File {
-  return {
-    arrayBuffer: async () => new ArrayBuffer(4),
-    name: "practice.mp4",
-    type: "video/mp4",
-  } as File;
+function fakeBlob(): Blob {
+  return new Blob([new Uint8Array([1, 2, 3, 4])], { type: "video/mp4" });
 }
 
 function fakeContext(result: AudioBuffer | Error): Pick<AudioContext, "decodeAudioData"> {
@@ -31,7 +26,7 @@ describe("decodeMonoPcm", () => {
         : new Float32Array([-1, 0.5, 1]),
     } as AudioBuffer;
 
-    await expect(decodeMonoPcm(fakeFile(), fakeContext(buffer)))
+    await expect(decodeMonoPcm(fakeBlob(), fakeContext(buffer)))
       .resolves.toMatchObject({
         samples: new Float32Array([0, 0.5, 0]),
         sampleRate: 48_000,
@@ -39,27 +34,8 @@ describe("decodeMonoPcm", () => {
       });
   });
 
-  it("reports an unsupported audio format when decoding fails", async () => {
-    await expect(decodeMonoPcm(fakeFile(), fakeContext(new Error("decode failed"))))
-      .rejects.toThrow("不支持该视频的音频格式");
-  });
-
-  it("reports a missing audio track from the local media preflight", async () => {
-    const video = document.createElement("video");
-    Object.defineProperty(video, "captureStream", {
-      value: () => ({ getAudioTracks: () => [] }),
-    });
-    const createElement = vi.spyOn(document, "createElement").mockImplementation((tagName) => (
-      tagName === "video" ? video : document.createElement(tagName)
-    ));
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:no-audio");
-    const decodeAudioData = vi.fn();
-
-    const result = decodeMonoPcm(fakeFile(), { decodeAudioData });
-    video.dispatchEvent(new Event("loadedmetadata"));
-
-    await expect(result).rejects.toThrow("视频没有可用音轨");
-    expect(decodeAudioData).not.toHaveBeenCalled();
-    createElement.mockRestore();
+  it("lets the fixed same-origin loader own public decode errors", async () => {
+    await expect(decodeMonoPcm(fakeBlob(), fakeContext(new Error("decode failed"))))
+      .rejects.toThrow("decode failed");
   });
 });
