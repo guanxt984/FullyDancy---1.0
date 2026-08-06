@@ -338,3 +338,59 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
   .timeline-panel { min-height: 178px; padding: 12px; }
   .beat-toolbar .analysis-primary { width: 100%; margin-left: 0; }
 }
+
+.beat-control-list {
+  display: grid;
+  gap: 8px;
+}
+
+.beat-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: oklch(0.14 0 0 / 0.9);
+}
+
+.beat-control-row--active {
+  border-color: oklch(0.91 0.16 115 / 0.58);
+  background: oklch(0.17 0.03 115 / 0.72);
+}
+
+.beat-time-button {
+  min-height: 38px;
+  min-width: 62px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--accent);
+  background: transparent;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.playhead-dot {
+  position: absolute;
+  top: 17px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--stage-text);
+  box-shadow: 0 0 0 4px oklch(1 0 0 / 0.16);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.beat-control-list > .analysis-primary {
+  justify-self: end;
+}
+
+@media (max-width: 767px) {
+  .beat-control-row { align-items: stretch; }
+  .beat-choice { flex: 1 1 120px; justify-content: center; }
+  .beat-control-list > .analysis-primary { justify-self: stretch; width: 100%; }
+}

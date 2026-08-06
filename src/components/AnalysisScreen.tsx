@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useMemo, useRef, useState } from "react";
 import { detectEnergyPeaks } from "../beat-analysis/energyPeaks";
 import { updateBeat } from "../chart/chart";
 import type { ActionRequirement, BeatPoint } from "../domain/types";
@@ -37,18 +37,16 @@ function createAudioContext(): MaybeClosableAudioContext {
   return AudioContextCtor ? new AudioContextCtor() : { decodeAudioData: async () => { throw new Error("AudioContext unavailable"); } };
 }
 
-function nextEnabledBeat(chart: BeatPoint[], currentId?: string) {
-  return chart.find((beat) => beat.enabled && beat.id !== currentId) ?? chart.find((beat) => beat.enabled) ?? null;
-}
-
 export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<AnalysisState>("idle");
   const [chart, setChart] = useState<BeatPoint[]>([]);
-  const [selectedBeatId, setSelectedBeatId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [activeBeatId, setActiveBeatId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const enabledChart = useMemo(() => chart.filter((beat) => beat.enabled), [chart]);
-  const selectedBeat = enabledChart.find((beat) => beat.id === selectedBeatId) ?? enabledChart[0] ?? null;
-  const durationSec = Math.max(1, ...chart.map((beat) => beat.timeSec));
+  const durationSec = Math.max(1, currentTime, ...chart.map((beat) => beat.timeSec));
+  const progressPercent = Math.min(100, (currentTime / durationSec) * 100);
 
   async function analyze() {
     setState("loading");
@@ -57,7 +55,7 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
     try {
       const beats = detectEnergyPeaks(await loadBuiltInLevelAudio(level, context));
       setChart(beats);
-      setSelectedBeatId(beats.find((beat) => beat.enabled)?.id ?? null);
+      setActiveBeatId(beats.find((beat) => beat.enabled)?.id ?? null);
       setState("editing");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : loadError);
@@ -67,15 +65,19 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
     }
   }
 
-  function changeSelectedBeat(action: ActionRequirement) {
-    if (!selectedBeat) return;
-    setChart((current) => updateBeat(current, selectedBeat.id, { action }));
+  function seekToBeat(beat: BeatPoint) {
+    if (videoRef.current) videoRef.current.currentTime = beat.timeSec;
+    setCurrentTime(beat.timeSec);
+    setActiveBeatId(beat.id);
   }
 
-  function deleteSelectedBeat() {
-    if (!selectedBeat) return;
-    setChart((current) => updateBeat(current, selectedBeat.id, { enabled: false }));
-    setSelectedBeatId(nextEnabledBeat(chart, selectedBeat.id)?.id ?? null);
+  function changeBeat(beatId: string, action: ActionRequirement) {
+    setChart((current) => updateBeat(current, beatId, { action }));
+  }
+
+  function deleteBeat(beatId: string) {
+    setChart((current) => updateBeat(current, beatId, { enabled: false }));
+    if (activeBeatId === beatId) setActiveBeatId(null);
   }
 
   return (
@@ -88,7 +90,7 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
 
       <section className="analysis-workbench" aria-labelledby="analysis-title">
         <h1 id="analysis-title" className="analysis-title">{title}</h1>
-        <video className="analysis-video" aria-label={videoLabel} controls preload="metadata" src={level.videoUrl} />
+        <video ref={videoRef} className="analysis-video" aria-label={videoLabel} controls preload="metadata" src={level.videoUrl} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} />
 
         <div className="timeline-panel">
           {state === "idle" ? <button className="primary-action analysis-primary" type="button" onClick={analyze}>{analyzeLabel}</button> : null}
@@ -99,31 +101,36 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
             <>
               <div className="beat-timeline" role="group" aria-label={timelineLabel}>
                 <div className="beat-timeline__rail" aria-hidden="true" />
+                <span className="playhead-dot" aria-label="视频进度" style={{ left: `${progressPercent}%` }} />
                 {chart.map((beat) => (
                   <button
                     key={beat.id}
-                    className={beat.enabled && selectedBeat?.id === beat.id ? "beat-pin beat-pin--selected" : beat.enabled ? "beat-pin" : "beat-pin beat-pin--off"}
+                    className={beat.enabled && activeBeatId === beat.id ? "beat-pin beat-pin--selected" : beat.enabled ? "beat-pin" : "beat-pin beat-pin--off"}
                     style={{ left: `${Math.min(100, (beat.timeSec / durationSec) * 100)}%` }}
                     type="button"
                     disabled={!beat.enabled}
-                    aria-label={`\u9009\u62e9\u5361\u70b9 ${beat.timeSec.toFixed(2)}s`}
-                    onClick={() => setSelectedBeatId(beat.id)}
+                    aria-label={`\u8df3\u5230\u5361\u70b9 ${beat.timeSec.toFixed(2)}s`}
+                    onClick={() => seekToBeat(beat)}
                   >
                     <span>{beat.timeSec.toFixed(2)}s</span>
                   </button>
                 ))}
               </div>
 
-              {selectedBeat ? (
-                <div className="beat-toolbar" aria-label="当前卡点设置">
-                  <span className="beat-toolbar__time">{selectedBeat.timeSec.toFixed(2)}s</span>
-                  {(Object.keys(actionLabels) as ActionRequirement[]).map((action) => (
-                    <label key={action} className="beat-choice">
-                      <input checked={selectedBeat.action === action} name={`${selectedBeat.id}-action`} type="radio" onChange={() => changeSelectedBeat(action)} />
-                      {actionLabels[action]}
-                    </label>
+              {enabledChart.length > 0 ? (
+                <div className="beat-control-list" aria-label="卡点动作设置">
+                  {enabledChart.map((beat) => (
+                    <div className={activeBeatId === beat.id ? "beat-control-row beat-control-row--active" : "beat-control-row"} key={beat.id}>
+                      <button type="button" className="beat-time-button" onClick={() => seekToBeat(beat)}>{beat.timeSec.toFixed(2)}s</button>
+                      {(Object.keys(actionLabels) as ActionRequirement[]).map((action) => (
+                        <label key={action} className="beat-choice">
+                          <input checked={beat.action === action} name={`${beat.id}-action`} type="radio" onChange={() => changeBeat(beat.id, action)} />
+                          {actionLabels[action]}
+                        </label>
+                      ))}
+                      <button type="button" className="delete-beat" onClick={() => deleteBeat(beat.id)}>{deleteLabel}</button>
+                    </div>
                   ))}
-                  <button type="button" className="delete-beat" onClick={deleteSelectedBeat}>{deleteLabel}</button>
                   <button className="primary-action analysis-primary" type="button" onClick={() => onConfirm(enabledChart)}>{confirmLabel}</button>
                 </div>
               ) : <p className="analysis-status">{emptyCopy}</p>}
