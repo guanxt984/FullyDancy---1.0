@@ -41,6 +41,8 @@ describe("AnalysisScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "\u5206\u6790\u5361\u70b9" }));
     await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
 
+    expect(document.querySelectorAll(".beat-mini-actions")).toHaveLength(2);
+    expect(document.querySelector(".beat-control-list")).toBeNull();
     expect(screen.getAllByRole("radio", { name: "\u5361\u8282\u594f" })).toHaveLength(2);
     expect(screen.getAllByRole("radio", { name: "\u624b\u81c2\u6253\u5f00" })).toHaveLength(2);
     expect(screen.getAllByRole("radio", { name: "\u4e0b\u8e72" })).toHaveLength(2);

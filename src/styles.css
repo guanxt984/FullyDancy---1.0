@@ -394,3 +394,129 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
   .beat-choice { flex: 1 1 120px; justify-content: center; }
   .beat-control-list > .analysis-primary { justify-self: stretch; width: 100%; }
 }
+
+.timeline-panel--compact {
+  position: relative;
+  min-height: 154px;
+  height: 154px;
+  padding: 14px 84px 12px 18px;
+  overflow: visible;
+}
+
+.beat-timeline--with-actions {
+  min-height: 126px;
+  margin: 0;
+}
+
+.beat-timeline--with-actions .beat-timeline__rail {
+  top: 16px;
+}
+
+.beat-marker {
+  position: absolute;
+  top: 0;
+  width: 70px;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+
+.beat-marker--off { opacity: 0.22; }
+
+.beat-marker .beat-pin {
+  position: relative;
+  top: auto;
+  min-width: 36px;
+  min-height: 31px;
+  transform: none;
+  z-index: 2;
+}
+
+.beat-marker .beat-pin::before {
+  width: 15px;
+  height: 15px;
+  margin-bottom: 2px;
+}
+
+.beat-marker .beat-pin span {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.beat-mini-actions {
+  display: grid;
+  gap: 1px;
+  justify-items: center;
+  margin-top: 2px;
+}
+
+.beat-mini-choice {
+  display: inline-grid;
+  grid-template-columns: 10px auto;
+  align-items: center;
+  gap: 2px;
+  min-height: 15px;
+  color: var(--stage-muted);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.beat-mini-choice input {
+  width: 8px;
+  height: 8px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.beat-mini-delete {
+  min-height: 15px;
+  padding: 0;
+  border: 0;
+  color: var(--stage-muted);
+  background: transparent;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.beat-mini-delete:hover,
+.beat-mini-choice:hover {
+  color: var(--accent);
+}
+
+.timeline-confirm {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  min-height: 42px;
+  min-width: 120px;
+}
+
+.beat-timeline--with-actions .playhead-dot {
+  top: 11px;
+  z-index: 3;
+  width: 8px;
+  height: 8px;
+}
+
+@media (max-width: 767px) {
+  .timeline-panel--compact {
+    height: 190px;
+    padding-right: 12px;
+    overflow-x: auto;
+  }
+  .beat-timeline--with-actions {
+    min-width: 760px;
+  }
+  .timeline-confirm {
+    position: sticky;
+    left: 0;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    margin-top: 8px;
+  }
+}
