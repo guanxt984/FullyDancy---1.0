@@ -46,7 +46,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: startLabel }));
     fireEvent.click(screen.getByRole("button", { name: selectLabel }));
     fireEvent.click(screen.getByRole("button", { name: analysisLabel }));
-    await screen.findByText("\u5361\u70b9\u8bbe\u7f6e");
+    await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
     fireEvent.click(screen.getByRole("button", { name: "\u786e\u8ba4\u5361\u70b9" }));
 
     expect(screen.getByRole("heading", { name: "\u8eab\u4f53\u6821\u51c6" })).toBeInTheDocument();

@@ -19,13 +19,25 @@ vi.mock("../beat-analysis/energyPeaks", () => ({
 import { AnalysisScreen } from "./AnalysisScreen";
 
 describe("AnalysisScreen", () => {
+  it("uses a stage-height video with a timeline for beat setup", async () => {
+    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={vi.fn()} onBack={vi.fn()} />);
+
+    expect(screen.getByLabelText("\u5f85\u5206\u6790\u821e\u8e48\u89c6\u9891")).toHaveClass("analysis-video");
+    fireEvent.click(screen.getByRole("button", { name: "\u5206\u6790\u5361\u70b9" }));
+
+    expect(await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "\u9009\u62e9\u5361\u70b9 1.00s" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "\u624b\u81c2\u6253\u5f00" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "\u4e0b\u8e72" })).toBeInTheDocument();
+  });
+
   it("confirms the user's edited chart", async () => {
     const onConfirm = vi.fn();
     render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={onConfirm} onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "\u5206\u6790\u5361\u70b9" }));
-    await screen.findByText("\u5361\u70b9\u8bbe\u7f6e");
-    fireEvent.click(screen.getAllByRole("radio", { name: "\u6253\u5f00" })[0]);
+    await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
+    fireEvent.click(screen.getByRole("radio", { name: "\u624b\u81c2\u6253\u5f00" }));
     fireEvent.click(screen.getByRole("button", { name: "\u786e\u8ba4\u5361\u70b9" }));
 
     expect(onConfirm).toHaveBeenCalledOnce();
