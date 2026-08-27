@@ -95,10 +95,17 @@ export function ChallengeScreen({
   const mediaRef = useRef<HTMLVideoElement>(null);
   const releaseRef = useRef<(() => void) | null>(null);
   const mountedRef = useRef(false);
-  const extractionPromiseRef = useRef<Promise<DemoPoseCache> | null>(null);
+  const extractionPromiseRef = useRef<{
+    videoUrl: string;
+    durationSec: number;
+    extractor: typeof extractDemoPoseCache;
+    promise: Promise<DemoPoseCache>;
+  } | null>(null);
   const gestureRef = useRef(new DanceGestureController());
   const [poseCache, setPoseCache] = useState<DemoPoseCache>(initialPoseCache);
   const [poseStatus, setPoseStatus] = useState(initialPoseCache.length > 0 ? `已缓存 ${initialPoseCache.length} 帧骨架` : loadingText);
+  const [poseExtractionState, setPoseExtractionState] = useState<"loading" | "ready" | "error">(initialPoseCache.length > 0 ? "ready" : "loading");
+  const [poseRetryVersion, setPoseRetryVersion] = useState(0);
   const [cameraStatus, setCameraStatus] = useState("等待开启摄像头");
   const [currentTime, setCurrentTime] = useState(0);
   const [phase, setPhase] = useState<"instructions" | "starting" | "active" | "camera-error">("instructions");
@@ -108,19 +115,49 @@ export function ChallengeScreen({
   const activeFrame = nearestPoseFrame(poseCache, currentTime, 0.18) ?? poseCache[0] ?? null;
 
   useEffect(() => {
-    if (initialPoseCache.length > 0) return;
+    if (initialPoseCache.length > 0) {
+      setPoseCache(initialPoseCache);
+      setPoseExtractionState("ready");
+      return;
+    }
     let cancelled = false;
+    setPoseCache([]);
     setPoseStatus(loadingText);
-    extractionPromiseRef.current ??= poseExtractor(level.videoUrl, durationSec);
-    extractionPromiseRef.current.then((cache) => {
-      if (cancelled) return;
-      setPoseCache(cache);
-      setPoseStatus(cache.length > 0 ? `已提取 ${cache.length} 帧骨架` : "暂未提取到骨架，稍后可重试");
-    });
+    setPoseExtractionState("loading");
+    const existing = extractionPromiseRef.current;
+    const request = existing
+      && existing.videoUrl === level.videoUrl
+      && existing.durationSec === durationSec
+      && existing.extractor === poseExtractor
+      ? existing.promise
+      : Promise.resolve().then(() => poseExtractor(level.videoUrl, durationSec));
+    if (request !== existing?.promise) {
+      extractionPromiseRef.current = { videoUrl: level.videoUrl, durationSec, extractor: poseExtractor, promise: request };
+    }
+    request
+      .then((cache) => {
+        if (cancelled) return;
+        if (cache.length > 0) {
+          setPoseCache(cache);
+          setPoseStatus(`已提取 ${cache.length} 帧骨架`);
+          setPoseExtractionState("ready");
+        } else {
+          setPoseStatus("未提取到示范骨架");
+          setPoseExtractionState("error");
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPoseStatus("示范骨架提取失败");
+        setPoseExtractionState("error");
+      })
+      .finally(() => {
+        if (extractionPromiseRef.current?.promise === request) extractionPromiseRef.current = null;
+      });
     return () => {
       cancelled = true;
     };
-  }, [durationSec, initialPoseCache.length, level.videoUrl, poseExtractor]);
+  }, [durationSec, initialPoseCache.length, level.videoUrl, poseExtractor, poseRetryVersion]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -140,6 +177,7 @@ export function ChallengeScreen({
     const media = mediaRef.current;
     if (!media) return;
     await media.play();
+    if (!mountedRef.current) return;
     setPlaying(true);
   }, []);
 
@@ -158,33 +196,37 @@ export function ChallengeScreen({
 
   const startChallenge = useCallback(async () => {
     const cameraVideo = cameraRef.current;
-    if (!cameraVideo || phase === "starting" || phase === "active") return;
+    const media = mediaRef.current;
+    if (!cameraVideo || !media || phase === "starting" || phase === "active") return;
     setPhase("starting");
     setCameraStatus("正在请求摄像头权限…");
     let camera: CameraSession | null = null;
     let provider: PoseProvider | null = null;
     let cancelLoop: (() => void) | null = null;
     let released = false;
+    let mediaStarted = false;
     const release = () => {
       if (released) return;
       released = true;
+      if (mediaStarted) media.pause();
       cancelLoop?.();
       provider?.stop();
       camera?.stop();
+      if (releaseRef.current === release) releaseRef.current = null;
     };
     try {
       camera = await cameraStarter(cameraVideo, {
         videoConstraints: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
       });
+      releaseRef.current = release;
       if (!mountedRef.current) {
-        camera.stop();
+        release();
         return;
       }
       provider = providerFactory();
       await provider.start();
       if (!mountedRef.current) {
-        provider.stop();
-        camera.stop();
+        release();
         return;
       }
       cancelLoop = poseLoop({
@@ -203,6 +245,7 @@ export function ChallengeScreen({
       });
       releaseRef.current = release;
       setCameraStatus("摄像头已开启");
+      mediaStarted = true;
       await play();
       if (!mountedRef.current) {
         release();
@@ -246,7 +289,9 @@ export function ChallengeScreen({
       <section className="challenge-shell challenge-shell--live" aria-labelledby="challenge-title">
         <section className="challenge-reference-overlay challenge-reference-overlay--full-height" aria-label={referenceTitle}>
           <div className="challenge-reference-stage">
-            {activeFrame ? <DemoSkeleton frame={activeFrame} /> : <span className="challenge-empty-state">{loadingText}</span>}
+            {activeFrame ? <DemoSkeleton frame={activeFrame} /> : poseExtractionState === "error" ? (
+              <button className="challenge-pose-retry" type="button" onClick={() => setPoseRetryVersion((version) => version + 1)}>重试示范骨架</button>
+            ) : <span className="challenge-empty-state">{loadingText}</span>}
           </div>
         </section>
 
