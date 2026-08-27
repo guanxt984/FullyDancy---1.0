@@ -1,9 +1,12 @@
 ﻿import type { BuiltInLevel } from "../levels/builtInLevel";
 
+import { SkipAction } from "./SkipAction";
+
 interface LevelSelectScreenProps {
   level: BuiltInLevel;
   onSelect: () => void;
   onBack: () => void;
+  onSkip: () => void;
 }
 
 const selectTitle = "\u9009\u62e9\u4f60\u7684\u6311\u6218";
@@ -13,7 +16,7 @@ const builtInMeta = "\u5185\u7f6e\u7ec3\u4e60\u00b7 45 \u79d2";
 const uploadLabel = "\u4e0a\u4f20\u81ea\u5df1\u7684\u821e\u8e48\uff08\u5373\u5c06\u5f00\u653e\uff09";
 const footerNote = "\u5148\u8fd9\u4e48\u8df3\u4e00\u6b21\uff0c\u518d\u4e00\u6b21\u3002";
 
-export function LevelSelectScreen({ level, onSelect, onBack }: LevelSelectScreenProps) {
+export function LevelSelectScreen({ level, onSelect, onBack, onSkip }: LevelSelectScreenProps) {
   const selectionLabel = `\u9009\u62e9 ${level.title}`;
 
   return (
@@ -27,6 +30,7 @@ export function LevelSelectScreen({ level, onSelect, onBack }: LevelSelectScreen
         </div>
       </section>
       <footer className="stage-footer stage-footer--selection"><p className="stage-note">{footerNote}</p></footer>
+      <SkipAction onSkip={onSkip} />
     </main>
   );
 }

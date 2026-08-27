@@ -1,17 +1,27 @@
-﻿import { useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { extractDemoPoseCache, nearestPoseFrame, type DemoPoseCache } from "../analysis/demoPoseCache";
+import { inferBeatActionsFromPose } from "../analysis/inferBeatActionsFromPose";
 import { detectEnergyPeaks } from "../beat-analysis/energyPeaks";
 import { updateBeat } from "../chart/chart";
-import type { ActionRequirement, BeatPoint } from "../domain/types";
+import type { ActionRequirement, BeatPoint, PoseFrame, PoseLandmark } from "../domain/types";
 import type { BuiltInLevel } from "../levels/builtInLevel";
 import { loadBuiltInLevelAudio } from "../media/loadBuiltInLevelAudio";
+import { SkipAction } from "./SkipAction";
+
+export interface AnalysisResult {
+  chart: BeatPoint[];
+  poseCache: DemoPoseCache;
+}
 
 interface AnalysisScreenProps {
   level: BuiltInLevel;
-  onConfirm: (chart: BeatPoint[]) => void;
+  onConfirm: (result: AnalysisResult) => void;
+  onSkip: (result: AnalysisResult | null) => void;
   onBack: () => void;
 }
 
 type AnalysisState = "idle" | "loading" | "editing" | "error";
+type PoseCacheState = "idle" | "extracting" | "ready" | "sparse";
 type MaybeClosableAudioContext = Pick<BaseAudioContext, "decodeAudioData"> & { close?: () => Promise<void> };
 
 const backLabel = "\u8fd4\u56de";
@@ -20,16 +30,37 @@ const title = "\u5148\u627e\u5361\u70b9";
 const analyzeLabel = "\u5206\u6790\u5361\u70b9";
 const loadingCopy = "\u6b63\u5728\u5206\u6790\u5361\u70b9\u2026";
 const timelineLabel = "\u5361\u70b9\u65f6\u95f4\u8f74";
+const progressLabel = "\u89c6\u9891\u8fdb\u5ea6";
+const videoTimeLabel = "视频时间";
+const playVideoLabel = "播放视频";
+const pauseVideoLabel = "暂停视频";
+const skeletonLabel = "\u793a\u8303\u9aa8\u67b6\u53e0\u52a0\u5c42";
+const armHighlightLabel = "\u624b\u81c2\u9ad8\u4eae";
+const squatHighlightLabel = "\u4e0b\u8e72\u9ad8\u4eae";
 const emptyCopy = "\u6ca1\u627e\u5230\u660e\u663e\u5361\u70b9\uff0c\u8fd9\u6bb5\u5148\u53ea\u770b\u793a\u8303\u3002";
 const retryLabel = "\u91cd\u8bd5";
-const deleteLabel = "\u5220\u9664";
-const confirmLabel = "\u786e\u8ba4\u5361\u70b9";
+const addBeatLabel = "新增卡点";
+const deleteLabel = "删除卡点";
+const confirmLabel = "进入下一步";
 const loadError = "\u5173\u5361\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5";
+const poseExtractingCopy = "\u6b63\u5728\u63d0\u53d6\u793a\u8303\u9aa8\u67b6\u2026";
+const poseSparseCopy = "\u9aa8\u67b6\u8bc6\u522b\u8f83\u5c11\uff0c\u53ef\u7ee7\u7eed\u624b\u52a8\u6807\u6ce8";
 const actionLabels: Record<ActionRequirement, string> = {
   rhythm: "\u5361\u8282\u594f",
-  open: "\u624b\u81c2\u6253\u5f00",
+  open: "手臂伸直",
   squat: "\u4e0b\u8e72",
 };
+const actionIcons: Record<ActionRequirement, string> = {
+  rhythm: "♪",
+  open: "↕",
+  squat: "⌄",
+};
+
+const skeletonLines = [
+  [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28],
+] as const;
+const armLines = [[11, 13], [13, 15], [12, 14], [14, 16]] as const;
+const squatLines = [[23, 25], [25, 27], [24, 26], [26, 28]] as const;
 
 function createAudioContext(): MaybeClosableAudioContext {
   const audioWindow = window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
@@ -37,27 +68,115 @@ function createAudioContext(): MaybeClosableAudioContext {
   return AudioContextCtor ? new AudioContextCtor() : { decodeAudioData: async () => { throw new Error("AudioContext unavailable"); } };
 }
 
-export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps) {
+function visible(landmark: PoseLandmark | undefined): landmark is PoseLandmark {
+  return Boolean(landmark && landmark.visibility >= 0.45);
+}
+
+function sameLine(line: readonly [number, number], group: readonly (readonly [number, number])[]): boolean {
+  return group.some(([from, to]) => from === line[0] && to === line[1]);
+}
+
+function formatClockTime(timeSec: number): string {
+  const totalSeconds = Math.max(0, Math.floor(Number.isFinite(timeSec) ? timeSec : 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function beatActions(beat: BeatPoint | null): ActionRequirement[] {
+  if (!beat) return [];
+  const actions = beat.actions?.length ? beat.actions : [beat.action];
+  return Array.from(new Set(actions));
+}
+
+function hasBeatAction(beat: BeatPoint | null, action: ActionRequirement): boolean {
+  return beatActions(beat).includes(action);
+}
+
+function SkeletonOverlay({ beat, frame }: { beat: BeatPoint | null; frame: PoseFrame }) {
+  const hotActions = beatActions(beat);
+  return (
+    <svg className="analysis-skeleton" aria-label={skeletonLabel} viewBox="0 0 1 1" preserveAspectRatio="none">
+      {skeletonLines.map((line) => {
+        const from = frame.landmarks[line[0]];
+        const to = frame.landmarks[line[1]];
+        if (!visible(from) || !visible(to)) return null;
+        const armHit = hotActions.includes("open") && sameLine(line, armLines);
+        const squatHit = hotActions.includes("squat") && sameLine(line, squatLines);
+        return (
+          <line
+            key={`${line[0]}-${line[1]}`}
+            className={armHit || squatHit ? "skeleton-line skeleton-line--hot" : "skeleton-line"}
+            aria-label={armHit ? armHighlightLabel : squatHit ? squatHighlightLabel : undefined}
+            x1={from.x}
+            y1={from.y}
+            x2={to.x}
+            y2={to.y}
+          />
+        );
+      })}
+      {frame.landmarks.map((landmark, index) => visible(landmark) ? <circle key={index} className="skeleton-joint" cx={landmark.x} cy={landmark.y} r="0.006" /> : null)}
+    </svg>
+  );
+}
+
+export function AnalysisScreen({ level, onConfirm, onSkip, onBack }: AnalysisScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<AnalysisState>("idle");
+  const [poseCacheState, setPoseCacheState] = useState<PoseCacheState>("idle");
   const [chart, setChart] = useState<BeatPoint[]>([]);
+  const [poseCache, setPoseCache] = useState<DemoPoseCache>([]);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [activeBeatId, setActiveBeatId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const enabledChart = useMemo(() => chart.filter((beat) => beat.enabled), [chart]);
   const timelineDuration = Math.max(1, duration, currentTime, ...chart.map((beat) => beat.timeSec));
   const progressPercent = Math.min(100, (currentTime / timelineDuration) * 100);
+  const videoTimeCopy = `${formatClockTime(currentTime)} / ${formatClockTime(timelineDuration)}`;
+  const activeBeat = useMemo(() => {
+    if (activeBeatId) return enabledChart.find((beat) => beat.id === activeBeatId) ?? null;
+    return enabledChart.find((beat) => Math.abs(beat.timeSec - currentTime) <= 0.25) ?? null;
+  }, [activeBeatId, currentTime, enabledChart]);
+  const activeFrame = useMemo(
+    () => nearestPoseFrame(poseCache, currentTime, 0.25) ?? (activeBeat ? nearestPoseFrame(poseCache, activeBeat.timeSec, 0.25) : null),
+    [activeBeat, currentTime, poseCache],
+  );
+  const poseStatusCopy = poseCacheState === "extracting"
+    ? poseExtractingCopy
+    : poseCacheState === "ready"
+      ? `\u5df2\u63d0\u53d6 ${poseCache.length} \u5e27\u793a\u8303\u9aa8\u67b6`
+      : poseCacheState === "sparse"
+        ? poseSparseCopy
+        : "";
+
+  useEffect(() => {
+    setPoseCache([]);
+    setPoseCacheState("idle");
+  }, [level.videoUrl]);
 
   async function analyze() {
     setState("loading");
     setError("");
+    setPoseCache([]);
+    setPoseCacheState("idle");
     const context = createAudioContext();
     try {
       const beats = detectEnergyPeaks(await loadBuiltInLevelAudio(level, context));
       setChart(beats);
       setActiveBeatId(beats.find((beat) => beat.enabled)?.id ?? null);
       setState("editing");
+      setPoseCacheState("extracting");
+      void extractDemoPoseCache(level.videoUrl, Math.max(videoRef.current?.duration || 0, ...beats.map((beat) => beat.timeSec))).then((cache) => {
+        setPoseCache(cache);
+        setPoseCacheState(cache.length > 0 ? "ready" : "sparse");
+        setChart((current) => inferBeatActionsFromPose(current, cache));
+      }).catch(() => {
+        setPoseCache([]);
+        setPoseCacheState("sparse");
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : loadError);
       setState("error");
@@ -66,19 +185,64 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
     }
   }
 
+  function seekToTime(timeSec: number, beatId: string | null = null) {
+    const nextTime = Math.max(0, Math.min(timelineDuration, timeSec));
+    if (videoRef.current) videoRef.current.currentTime = nextTime;
+    setCurrentTime(nextTime);
+    setActiveBeatId(beatId);
+  }
+
   function seekToBeat(beat: BeatPoint) {
-    if (videoRef.current) videoRef.current.currentTime = beat.timeSec;
-    setCurrentTime(beat.timeSec);
-    setActiveBeatId(beat.id);
+    seekToTime(beat.timeSec, beat.id);
   }
 
-  function changeBeat(beatId: string, action: ActionRequirement) {
-    setChart((current) => updateBeat(current, beatId, { action }));
+  function togglePlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isPlaying) {
+      video.pause();
+      return;
+    }
+    void video.play().catch(() => setIsPlaying(false));
   }
 
-  function deleteBeat(beatId: string) {
-    setChart((current) => updateBeat(current, beatId, { enabled: false }));
-    if (activeBeatId === beatId) setActiveBeatId(null);
+  function seekTimeline(event: React.MouseEvent<HTMLDivElement>) {
+    const rect = timelineRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    seekToTime(ratio * timelineDuration);
+  }
+
+  function toggleBeatAction(beat: BeatPoint, action: ActionRequirement) {
+    seekToBeat(beat);
+    const currentActions = beatActions(beat);
+    const nextActions = currentActions.includes(action)
+      ? currentActions.filter((item) => item !== action)
+      : [...currentActions, action];
+    const safeActions = nextActions.length > 0 ? nextActions : ["rhythm" as const];
+    setChart((current) => updateBeat(current, beat.id, { action, actions: safeActions }));
+  }
+
+  function addBeat() {
+    const timeSec = Number(currentTime.toFixed(2));
+    const nextBeat: BeatPoint = {
+      id: `manual-${Date.now()}-${Math.round(timeSec * 100)}`,
+      beatIndex: chart.length + 1,
+      timeSec,
+      salience: 0.85,
+      enabled: true,
+      action: "rhythm",
+      actions: ["rhythm"],
+    };
+    setChart((current) => [...current, nextBeat].sort((left, right) => left.timeSec - right.timeSec));
+    setActiveBeatId(nextBeat.id);
+    seekToTime(timeSec, nextBeat.id);
+  }
+
+  function deleteBeat(beat: BeatPoint) {
+    seekToBeat(beat);
+    setChart((current) => updateBeat(current, beat.id, { enabled: false }));
+    setActiveBeatId(null);
   }
 
   return (
@@ -91,16 +255,32 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
 
       <section className="analysis-workbench" aria-labelledby="analysis-title">
         <h1 id="analysis-title" className="analysis-title">{title}</h1>
-        <video
-          ref={videoRef}
-          className="analysis-video"
-          aria-label={videoLabel}
-          controls
-          preload="metadata"
-          src={level.videoUrl}
-          onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
-          onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-        />
+        <div className="analysis-video-frame">
+          <video
+            ref={videoRef}
+            className="analysis-video"
+            aria-label={videoLabel}
+            preload="metadata"
+            src={level.videoUrl}
+            onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+            onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
+          />
+          {activeFrame ? <SkeletonOverlay beat={activeBeat} frame={activeFrame} /> : null}
+          <button className="analysis-play-toggle" type="button" aria-label={isPlaying ? pauseVideoLabel : playVideoLabel} onClick={togglePlayback}>
+            <span className={isPlaying ? "play-icon play-icon--pause" : "play-icon play-icon--play"} aria-hidden="true">
+              {isPlaying ? (
+                <>
+                  <span className="play-icon-bar" />
+                  <span className="play-icon-bar" />
+                </>
+              ) : <span className="play-icon-triangle" />}
+            </span>
+          </button>
+          <span className="analysis-video-time" aria-label={videoTimeLabel}>{videoTimeCopy}</span>
+        </div>
 
         <div className="timeline-panel timeline-panel--compact">
           {state === "idle" ? <button className="primary-action analysis-primary" type="button" onClick={analyze}>{analyzeLabel}</button> : null}
@@ -109,13 +289,18 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
 
           {state === "editing" ? (
             <>
-              <div className="beat-timeline beat-timeline--with-actions" role="group" aria-label={timelineLabel}>
+              <div ref={timelineRef} className="beat-timeline beat-timeline--with-actions" role="group" aria-label={timelineLabel} onClick={seekTimeline}>
                 <div className="beat-timeline__rail" aria-hidden="true" />
-                <span className="playhead-dot" aria-label="视频进度" style={{ left: `${progressPercent}%` }} />
+                <span className="playhead-dot" aria-label={progressLabel} style={{ left: `${progressPercent}%` }} />
                 {chart.map((beat) => {
                   const left = `${Math.min(100, (beat.timeSec / timelineDuration) * 100)}%`;
                   return (
-                    <div className={beat.enabled ? "beat-marker" : "beat-marker beat-marker--off"} key={beat.id} style={{ left }}>
+                    <div className={beat.enabled ? "beat-marker" : "beat-marker beat-marker--off"} key={beat.id} style={{ left }} onClick={(event) => event.stopPropagation()}>
+                      <span className="beat-pin-action-icons beat-pin-action-icons--row">
+                        {beatActions(beat).map((action) => (
+                          <span key={action} className={`beat-pin-action-icon beat-pin-action-icon--${action}`} aria-label={`卡点任务：${actionLabels[action]}`}>{actionIcons[action]}</span>
+                        ))}
+                      </span>
                       <button
                         className={beat.enabled && activeBeatId === beat.id ? "beat-pin beat-pin--selected" : "beat-pin"}
                         type="button"
@@ -123,28 +308,48 @@ export function AnalysisScreen({ level, onConfirm, onBack }: AnalysisScreenProps
                         aria-label={`\u8df3\u5230\u5361\u70b9 ${beat.timeSec.toFixed(2)}s`}
                         onClick={() => seekToBeat(beat)}
                       >
-                        <span>{beat.timeSec.toFixed(2)}s</span>
+                        <span className="beat-pin-dot" aria-hidden="true" />
+                        <span className="beat-pin-time">{beat.timeSec.toFixed(2)}s</span>
                       </button>
-                      {beat.enabled ? (
-                        <div className="beat-mini-actions">
-                          {(Object.keys(actionLabels) as ActionRequirement[]).map((action) => (
-                            <label key={action} className="beat-mini-choice">
-                              <input checked={beat.action === action} name={`${beat.id}-action`} type="radio" onChange={() => changeBeat(beat.id, action)} />
-                              <span>{actionLabels[action]}</span>
-                            </label>
-                          ))}
-                          <button type="button" className="beat-mini-delete" onClick={() => deleteBeat(beat.id)}>{deleteLabel}</button>
-                        </div>
-                      ) : null}
                     </div>
                   );
                 })}
               </div>
-              {enabledChart.length > 0 ? <button className="primary-action analysis-primary timeline-confirm" type="button" onClick={() => onConfirm(enabledChart)}>{confirmLabel}</button> : <p className="analysis-status">{emptyCopy}</p>}
+              <div className="timeline-actions-row">
+                {activeBeat ? (
+                  <div className="beat-tool-tab">
+                    <span className="beat-tool-time">{activeBeat.timeSec.toFixed(2)}s</span>
+                    <span className="beat-tool-group beat-tool-group--points" aria-label="卡点操作">
+                      <button type="button" className="beat-tool-button" onClick={addBeat}>
+                        <span className="beat-action-icon" aria-hidden="true">＋</span>
+                        <span>{addBeatLabel}</span>
+                      </button>
+                      <button type="button" className="beat-tool-button beat-tool-button--delete" aria-label={deleteLabel} onClick={() => deleteBeat(activeBeat)}>
+                        <span className="beat-action-icon" aria-hidden="true">×</span>
+                        <span>{deleteLabel}</span>
+                      </button>
+                    </span>
+                    <span className="beat-tool-group beat-tool-group--actions" aria-label="动作打标">
+                      {(Object.keys(actionLabels) as ActionRequirement[]).map((action) => (
+                        <label key={action} className={hasBeatAction(activeBeat, action) ? "beat-tool-button beat-tool-button--active" : "beat-tool-button"}>
+                          <input checked={hasBeatAction(activeBeat, action)} name={`${activeBeat.id}-${action}`} type="checkbox" onChange={() => toggleBeatAction(activeBeat, action)} />
+                          <span className={`beat-action-icon beat-action-icon--${action}`} aria-hidden="true">{actionIcons[action]}</span>
+                          <span>{actionLabels[action]}</span>
+                        </label>
+                      ))}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+              <div className="timeline-footer">
+                {poseStatusCopy ? <p role="status" className="pose-cache-status">{poseStatusCopy}</p> : <span />}
+                {enabledChart.length > 0 ? <button className="primary-action analysis-primary timeline-confirm" type="button" onClick={() => onConfirm({ chart: enabledChart, poseCache })}>{confirmLabel}</button> : <p className="analysis-status">{emptyCopy}</p>}
+              </div>
             </>
           ) : null}
         </div>
       </section>
+      <SkipAction onSkip={() => onSkip(chart.length > 0 ? { chart: enabledChart, poseCache } : null)} />
     </main>
   );
 }
