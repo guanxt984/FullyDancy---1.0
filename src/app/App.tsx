@@ -1,21 +1,34 @@
-﻿import { useState } from "react";
-import { AnalysisScreen } from "../components/AnalysisScreen";
+import { useState } from "react";
+import type { DemoPoseCache } from "../analysis/demoPoseCache";
+import { AnalysisScreen, type AnalysisResult } from "../components/AnalysisScreen";
+import { CalibrationScreen } from "../components/CalibrationScreen";
+import { ChallengeScreen } from "../components/ChallengeScreen";
 import { HomeScreen } from "../components/HomeScreen";
 import { LevelSelectScreen } from "../components/LevelSelectScreen";
 import type { BeatPoint } from "../domain/types";
 import { BUILT_IN_LEVEL } from "../levels/builtInLevel";
+import { DEFAULT_BUILT_IN_CHART } from "../levels/defaultChart";
 import type { PrototypeScreen } from "./prototypeFlow";
-
-const calibrationTitle = "\u8eab\u4f53\u6821\u51c6";
-const calibrationCopyStart = "\u5df2\u786e\u8ba4";
-const calibrationCopyEnd = "\u4e2a\u5361\u70b9\uff0c\u4e0b\u4e00\u6b65\u5c06\u6253\u5f00\u6444\u50cf\u5934\u8fdb\u884c\u81ea\u52a8\u6821\u51c6\u3002";
 
 export function App() {
   const [screen, setScreen] = useState<PrototypeScreen>("home");
   const [chart, setChart] = useState<BeatPoint[]>([]);
+  const [demoPoseCache, setDemoPoseCache] = useState<DemoPoseCache>([]);
+
+  function acceptAnalysis(result: AnalysisResult) {
+    setChart(result.chart);
+    setDemoPoseCache(result.poseCache);
+    setScreen("calibration");
+  }
+
+  function skipAnalysis(result: AnalysisResult | null) {
+    setChart(result?.chart.length ? result.chart : DEFAULT_BUILT_IN_CHART);
+    setDemoPoseCache(result?.poseCache ?? []);
+    setScreen("calibration");
+  }
 
   if (screen === "level-select") {
-    return <LevelSelectScreen level={BUILT_IN_LEVEL} onBack={() => setScreen("home")} onSelect={() => setScreen("analysis")} />;
+    return <LevelSelectScreen level={BUILT_IN_LEVEL} onBack={() => setScreen("home")} onSelect={() => setScreen("analysis")} onSkip={() => setScreen("analysis")} />;
   }
 
   if (screen === "analysis") {
@@ -23,23 +36,19 @@ export function App() {
       <AnalysisScreen
         level={BUILT_IN_LEVEL}
         onBack={() => setScreen("level-select")}
-        onConfirm={(confirmedChart) => {
-          setChart(confirmedChart);
-          setScreen("calibration");
-        }}
+        onConfirm={acceptAnalysis}
+        onSkip={skipAnalysis}
       />
     );
   }
 
   if (screen === "calibration") {
-    return (
-      <main className="calibration-placeholder">
-        <span className="stage-brand">FullyDancy</span>
-        <h1>{calibrationTitle}</h1>
-        <p>{calibrationCopyStart} {chart.length} {calibrationCopyEnd}</p>
-      </main>
-    );
+    return <CalibrationScreen chartCount={chart.length} onComplete={() => setScreen("challenge")} onSkip={() => setScreen("challenge")} />;
   }
 
-  return <HomeScreen onStart={() => setScreen("level-select")} />;
+  if (screen === "challenge") {
+    return <ChallengeScreen level={BUILT_IN_LEVEL} chart={chart} initialPoseCache={demoPoseCache} onBack={() => setScreen("calibration")} />;
+  }
+
+  return <HomeScreen onStart={() => setScreen("level-select")} onSkip={() => setScreen("level-select")} />;
 }
