@@ -1,10 +1,16 @@
 import { StrictMode } from "react";
+// @ts-expect-error Vitest runs in Node, while the browser app intentionally omits Node type declarations.
+import { readFileSync } from "node:fs";
+// @ts-expect-error Vitest runs in Node, while the browser app intentionally omits Node type declarations.
+import { cwd } from "node:process";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DemoPoseCache } from "../analysis/demoPoseCache";
 import type { BeatPoint } from "../domain/types";
 import type { BuiltInLevel } from "../levels/builtInLevel";
 import { ChallengeScreen } from "./ChallengeScreen";
+
+const styles = readFileSync(`${cwd()}/src/styles.css`, "utf8");
 
 const level: BuiltInLevel = { id: "level-1", title: "8月3日舞蹈挑战", videoUrl: "/levels/level-1.mp4", durationSec: 13 };
 const chart: BeatPoint[] = [{ id: "beat-1", beatIndex: 1, timeSec: 0.68, salience: 1, enabled: true, action: "rhythm" }];
@@ -228,8 +234,11 @@ describe("ChallengeScreen", () => {
   });
 
   it("lets safe-area insets define the floating transport width without mobile overflow", () => {
-    renderChallenge();
+    const transportRules = [...styles.matchAll(/\.challenge-transport--floating\s*\{([^}]*)\}/g)].map((match) => match[1]);
 
-    expect(screen.getByLabelText("播放控制")).toHaveStyle({ width: "auto" });
+    expect(transportRules).toContainEqual(expect.stringMatching(/width:\s*auto/));
+    expect(transportRules).toContainEqual(expect.stringMatching(/left:\s*max\(var\(--challenge-edge\),\s*env\(safe-area-inset-left\)\)/));
+    expect(transportRules).toContainEqual(expect.stringMatching(/right:\s*max\(var\(--challenge-edge\),\s*env\(safe-area-inset-right\)\)/));
+    expect(transportRules).not.toContainEqual(expect.stringMatching(/width:\s*100%/));
   });
 });

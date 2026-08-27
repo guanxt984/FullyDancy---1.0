@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen } from "@testing-library/react";
+﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { BeatPoint } from "../domain/types";
@@ -73,6 +73,7 @@ vi.mock("../components/ChallengeScreen", async (importOriginal) => {
 
 import { App } from "./App";
 import { extractDemoPoseCache } from "../analysis/demoPoseCache";
+import { startCamera } from "../pose/camera";
 
 describe("App", () => {
   it("moves from the game introduction to level selection", () => {
@@ -108,7 +109,9 @@ describe("App", () => {
 
   it("enters the lightweight challenge shell after calibration completes", async () => {
     const poseExtractor = vi.mocked(extractDemoPoseCache);
+    const cameraStarter = vi.mocked(startCamera);
     poseExtractor.mockClear();
+    cameraStarter.mockClear();
     challengeMockState.renderReal = true;
 
     try {
@@ -123,7 +126,14 @@ describe("App", () => {
       fireEvent.click(screen.getByRole("button", { name: "\u5b8c\u6210\u6821\u51c6" }));
 
       expect(screen.getByRole("dialog", { name: "舞蹈玩法" })).toBeVisible();
+      await waitFor(() => expect(poseExtractor).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(poseExtractor).toHaveBeenCalledOnce();
+      expect(cameraStarter).not.toHaveBeenCalled();
     } finally {
       challengeMockState.renderReal = false;
     }
