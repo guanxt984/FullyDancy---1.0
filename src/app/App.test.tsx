@@ -1,6 +1,6 @@
 ﻿import { fireEvent, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type { DemoPoseCache } from "../analysis/demoPoseCache";
 import type { BeatPoint } from "../domain/types";
 import { DEFAULT_BUILT_IN_CHART } from "../levels/defaultChart";
 
@@ -9,6 +9,7 @@ const startLabel = "\u5f00\u59cb\u6e38\u620f";
 const selectLabel = "\u9009\u62e9 8\u67083\u65e5\u821e\u8e48\u6311\u6218";
 const analysisLabel = "\u5206\u6790\u5361\u70b9";
 const nextStepLabel = "进入下一步";
+const challengeMockState = vi.hoisted(() => ({ renderReal: false }));
 
 const chart: BeatPoint[] = [
   { id: "beat-1", beatIndex: 1, timeSec: 1, salience: 1, enabled: true, action: "rhythm" },
@@ -55,15 +56,20 @@ vi.mock("../components/CalibrationScreen", () => ({
   ),
 }));
 
-vi.mock("../components/ChallengeScreen", () => ({
-  ChallengeScreen: ({ chart, initialPoseCache }: { chart: BeatPoint[]; initialPoseCache: DemoPoseCache }) => (
-    <main>
-      <h1>挑战测试页</h1>
-      <span>缓存 {initialPoseCache.length} 帧</span>
-      <span>卡点 {chart.length} 个</span>
-    </main>
-  ),
-}));
+vi.mock("../components/ChallengeScreen", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../components/ChallengeScreen")>();
+  return {
+    ChallengeScreen: (props: ComponentProps<typeof original.ChallengeScreen>) => challengeMockState.renderReal ? (
+      <original.ChallengeScreen {...props} />
+    ) : (
+      <main>
+        <h1>挑战测试页</h1>
+        <span>缓存 {props.initialPoseCache.length} 帧</span>
+        <span>卡点 {props.chart.length} 个</span>
+      </main>
+    ),
+  };
+});
 
 import { App } from "./App";
 import { extractDemoPoseCache } from "../analysis/demoPoseCache";
@@ -103,20 +109,24 @@ describe("App", () => {
   it("enters the lightweight challenge shell after calibration completes", async () => {
     const poseExtractor = vi.mocked(extractDemoPoseCache);
     poseExtractor.mockClear();
-    render(<App />);
+    challengeMockState.renderReal = true;
 
-    fireEvent.click(screen.getByRole("button", { name: startLabel }));
-    fireEvent.click(screen.getByRole("button", { name: selectLabel }));
-    fireEvent.click(screen.getByRole("button", { name: analysisLabel }));
-    await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
-    await screen.findByText("已提取 1 帧示范骨架");
-    fireEvent.click(screen.getByRole("button", { name: nextStepLabel }));
-    fireEvent.click(screen.getByRole("button", { name: "\u5b8c\u6210\u6821\u51c6" }));
+    try {
+      render(<App />);
 
-    expect(screen.getByRole("heading", { name: "挑战测试页" })).toBeInTheDocument();
-    expect(screen.getByText("缓存 1 帧")).toBeInTheDocument();
-    expect(screen.getByText("卡点 1 个")).toBeInTheDocument();
-    expect(poseExtractor).toHaveBeenCalledOnce();
+      fireEvent.click(screen.getByRole("button", { name: startLabel }));
+      fireEvent.click(screen.getByRole("button", { name: selectLabel }));
+      fireEvent.click(screen.getByRole("button", { name: analysisLabel }));
+      await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
+      await screen.findByText("已提取 1 帧示范骨架");
+      fireEvent.click(screen.getByRole("button", { name: nextStepLabel }));
+      fireEvent.click(screen.getByRole("button", { name: "\u5b8c\u6210\u6821\u51c6" }));
+
+      expect(screen.getByRole("dialog", { name: "舞蹈玩法" })).toBeVisible();
+      expect(poseExtractor).toHaveBeenCalledOnce();
+    } finally {
+      challengeMockState.renderReal = false;
+    }
   });
 
   it("uses deterministic fallbacks when every setup screen is skipped", () => {

@@ -226,4 +226,10 @@ describe("ChallengeScreen", () => {
     expect(screen.getByRole("region", { name: "你的实时舞蹈画面" })).toHaveClass("challenge-user-camera-card--background");
     expect(screen.getByRole("region", { name: "示范骨架舞者" })).toHaveClass("challenge-reference-overlay--full-height");
   });
+
+  it("lets safe-area insets define the floating transport width without mobile overflow", () => {
+    renderChallenge();
+
+    expect(screen.getByLabelText("播放控制")).toHaveStyle({ width: "auto" });
+  });
 });

@@ -286,7 +286,7 @@ export function ChallengeScreen({
           </div>
         </section>
 
-        <div className="challenge-transport challenge-transport--floating" aria-label="播放控制">
+        <div className="challenge-transport challenge-transport--floating" aria-label="播放控制" style={{ width: "auto" }}>
           {phase === "active" ? <button type="button" onClick={togglePlayback}>{playing ? "暂停" : "继续"}</button> : null}
           {phase === "active" ? <button type="button" onClick={restart}>重新开始</button> : null}
           {phase === "active" ? <span aria-live="polite">{gestureStatus}</span> : null}
