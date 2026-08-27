@@ -20,8 +20,6 @@ interface ChallengeScreenProps {
 }
 
 const backLabel = "返回";
-const title = "开始舞蹈";
-const kicker = "Dance challenge";
 const referenceTitle = "示范骨架舞者";
 const cameraTitle = "你的实时舞蹈画面";
 const skeletonLabel = "示范骨架运动";
@@ -103,7 +101,6 @@ export function ChallengeScreen({
   } | null>(null);
   const gestureRef = useRef(new DanceGestureController());
   const [poseCache, setPoseCache] = useState<DemoPoseCache>(initialPoseCache);
-  const [poseStatus, setPoseStatus] = useState(initialPoseCache.length > 0 ? `已缓存 ${initialPoseCache.length} 帧骨架` : loadingText);
   const [poseExtractionState, setPoseExtractionState] = useState<"loading" | "ready" | "error">(initialPoseCache.length > 0 ? "ready" : "loading");
   const [poseRetryVersion, setPoseRetryVersion] = useState(0);
   const [cameraStatus, setCameraStatus] = useState("等待开启摄像头");
@@ -122,7 +119,6 @@ export function ChallengeScreen({
     }
     let cancelled = false;
     setPoseCache([]);
-    setPoseStatus(loadingText);
     setPoseExtractionState("loading");
     const existing = extractionPromiseRef.current;
     const request = existing
@@ -139,16 +135,13 @@ export function ChallengeScreen({
         if (cancelled) return;
         if (cache.length > 0) {
           setPoseCache(cache);
-          setPoseStatus(`已提取 ${cache.length} 帧骨架`);
           setPoseExtractionState("ready");
         } else {
-          setPoseStatus("未提取到示范骨架");
           setPoseExtractionState("error");
         }
       })
       .catch(() => {
         if (cancelled) return;
-        setPoseStatus("示范骨架提取失败");
         setPoseExtractionState("error");
       })
       .finally(() => {
@@ -282,27 +275,14 @@ export function ChallengeScreen({
       </section>
       <header className="stage-header challenge-stage__header">
         <button className="back-action" type="button" onClick={onBack}>{backLabel}</button>
-        <span className="stage-brand">FullyDancy</span>
-        <span className="stage-mode">04 / 04</span>
       </header>
 
-      <section className="challenge-shell challenge-shell--live" aria-labelledby="challenge-title">
+      <section className="challenge-shell challenge-shell--live" aria-label="舞蹈挑战">
         <section className="challenge-reference-overlay challenge-reference-overlay--full-height" aria-label={referenceTitle}>
           <div className="challenge-reference-stage">
             {activeFrame ? <DemoSkeleton frame={activeFrame} /> : poseExtractionState === "error" ? (
               <button className="challenge-pose-retry" type="button" onClick={() => setPoseRetryVersion((version) => version + 1)}>重试示范骨架</button>
             ) : <span className="challenge-empty-state">{loadingText}</span>}
-          </div>
-        </section>
-
-        <section className="challenge-hud challenge-hud--floating" aria-label="挑战状态">
-          <div className="challenge-hud__identity">
-            <span>{kicker}</span>
-            <h1 id="challenge-title">{title}</h1>
-          </div>
-          <div className="challenge-hud__metrics">
-            <span>{chart.length} 个卡点</span>
-            <span>{poseStatus}</span>
           </div>
         </section>
 

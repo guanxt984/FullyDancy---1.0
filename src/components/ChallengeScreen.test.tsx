@@ -101,6 +101,24 @@ describe("ChallengeScreen", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
+  it("shows only the essential controls in the active challenge HUD", async () => {
+    const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
+    renderChallenge({ cameraStarter });
+    const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
+    vi.spyOn(media, "play").mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" })));
+
+    expect(screen.queryByRole("heading", { name: "开始舞蹈" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/个卡点/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/已提取 .* 帧骨架/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Dance challenge")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "返回" })).toBeVisible();
+    expect(screen.getByLabelText("播放控制")).toBeVisible();
+    expect(screen.getByRole("region", { name: "示范骨架舞者" })).toHaveClass("challenge-reference-overlay--full-height");
+  });
+
   it("offers retry after camera startup fails without reopening instructions", async () => {
     const cameraStarter = vi.fn().mockRejectedValueOnce(new DOMException("denied", "NotAllowedError")).mockResolvedValueOnce({ stream: {} as MediaStream, stop: vi.fn() });
     renderChallenge({ cameraStarter });

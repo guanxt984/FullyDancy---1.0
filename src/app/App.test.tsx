@@ -66,6 +66,7 @@ vi.mock("../components/ChallengeScreen", () => ({
 }));
 
 import { App } from "./App";
+import { extractDemoPoseCache } from "../analysis/demoPoseCache";
 
 describe("App", () => {
   it("moves from the game introduction to level selection", () => {
@@ -100,6 +101,8 @@ describe("App", () => {
   });
 
   it("enters the lightweight challenge shell after calibration completes", async () => {
+    const poseExtractor = vi.mocked(extractDemoPoseCache);
+    poseExtractor.mockClear();
     render(<App />);
 
     fireEvent.click(screen.getByRole("button", { name: startLabel }));
@@ -113,6 +116,7 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "挑战测试页" })).toBeInTheDocument();
     expect(screen.getByText("缓存 1 帧")).toBeInTheDocument();
     expect(screen.getByText("卡点 1 个")).toBeInTheDocument();
+    expect(poseExtractor).toHaveBeenCalledOnce();
   });
 
   it("uses deterministic fallbacks when every setup screen is skipped", () => {

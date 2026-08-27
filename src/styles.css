@@ -525,6 +525,7 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
 }
 
 .challenge-stage--camera-fullscreen {
+  --challenge-edge: clamp(20px, 3vw, 48px);
   position: relative;
   display: block;
   min-height: 100dvh;
@@ -569,7 +570,6 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
 }
 
 .challenge-stage--camera-fullscreen .challenge-shell--live {
-  --challenge-edge: clamp(20px, 3vw, 48px);
   position: absolute;
   inset: 0;
   display: block;
@@ -579,6 +579,10 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
 }
 
 .challenge-stage--camera-fullscreen .challenge-stage__header {
+  top: max(var(--challenge-edge), env(safe-area-inset-top));
+  right: max(var(--challenge-edge), env(safe-area-inset-right));
+  left: max(var(--challenge-edge), env(safe-area-inset-left));
+  display: block;
   color: var(--accent);
   text-shadow: 0 1px 8px oklch(0.04 0 0 / 0.72);
 }
@@ -622,49 +626,6 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
   text-shadow: 0 1px 8px oklch(0.04 0 0 / 0.78);
 }
 
-.challenge-hud--floating {
-  position: absolute;
-  top: calc(var(--safe-y) + 76px);
-  left: var(--challenge-edge);
-  right: var(--challenge-edge);
-  z-index: 3;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 32px;
-  color: var(--accent);
-  pointer-events: none;
-}
-
-.challenge-hud__identity,
-.challenge-hud__metrics {
-  display: grid;
-  gap: 4px;
-}
-
-.challenge-hud__identity > span,
-.challenge-hud__metrics span {
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 780;
-  line-height: 1.25;
-  text-shadow: 0 1px 8px oklch(0.04 0 0 / 0.82);
-}
-
-.challenge-hud__identity h1 {
-  margin: 0;
-  color: var(--accent);
-  font-size: clamp(28px, 3vw, 48px);
-  line-height: 0.95;
-  letter-spacing: -0.03em;
-  text-shadow: 0 2px 10px oklch(0.04 0 0 / 0.82);
-}
-
-.challenge-hud__metrics {
-  justify-items: end;
-  padding-top: 3px;
-}
-
 .challenge-transport {
   display: flex;
   align-items: center;
@@ -678,9 +639,9 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
 
 .challenge-transport--floating {
   position: absolute;
-  right: var(--challenge-edge);
-  bottom: calc(var(--safe-y) + 28px);
-  left: var(--challenge-edge);
+  right: max(var(--challenge-edge), env(safe-area-inset-right));
+  bottom: max(var(--challenge-edge), env(safe-area-inset-bottom));
+  left: max(var(--challenge-edge), env(safe-area-inset-left));
   z-index: 4;
   justify-content: flex-end;
 }
@@ -722,8 +683,8 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
 }
 
 .challenge-user-camera-card--background .challenge-camera-status {
-  right: var(--challenge-edge, 32px);
-  bottom: calc(var(--safe-y) + 88px);
+  right: max(var(--challenge-edge), env(safe-area-inset-right));
+  bottom: calc(max(var(--challenge-edge), env(safe-area-inset-bottom)) + 58px);
   padding: 0;
   border: 0;
   color: var(--accent);
@@ -783,18 +744,6 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
 @media (max-width: 860px) {
   .challenge-reference-overlay--full-height {
     width: 82vw;
-  }
-
-  .challenge-hud--floating {
-    gap: 18px;
-  }
-
-  .challenge-hud__identity h1 {
-    font-size: 30px;
-  }
-
-  .challenge-hud__metrics span:last-child {
-    display: none;
   }
 
   .challenge-transport--floating {
