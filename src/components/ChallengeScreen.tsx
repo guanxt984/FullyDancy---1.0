@@ -94,6 +94,8 @@ export function ChallengeScreen({
   const cameraRef = useRef<HTMLVideoElement>(null);
   const mediaRef = useRef<HTMLVideoElement>(null);
   const releaseRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(false);
+  const extractionPromiseRef = useRef<Promise<DemoPoseCache> | null>(null);
   const gestureRef = useRef(new DanceGestureController());
   const [poseCache, setPoseCache] = useState<DemoPoseCache>(initialPoseCache);
   const [poseStatus, setPoseStatus] = useState(initialPoseCache.length > 0 ? `已缓存 ${initialPoseCache.length} 帧骨架` : loadingText);
@@ -109,7 +111,8 @@ export function ChallengeScreen({
     if (initialPoseCache.length > 0) return;
     let cancelled = false;
     setPoseStatus(loadingText);
-    poseExtractor(level.videoUrl, durationSec).then((cache) => {
+    extractionPromiseRef.current ??= poseExtractor(level.videoUrl, durationSec);
+    extractionPromiseRef.current.then((cache) => {
       if (cancelled) return;
       setPoseCache(cache);
       setPoseStatus(cache.length > 0 ? `已提取 ${cache.length} 帧骨架` : "暂未提取到骨架，稍后可重试");
@@ -118,6 +121,15 @@ export function ChallengeScreen({
       cancelled = true;
     };
   }, [durationSec, initialPoseCache.length, level.videoUrl, poseExtractor]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      releaseRef.current?.();
+      releaseRef.current = null;
+    };
+  }, []);
 
   const pause = useCallback(() => {
     mediaRef.current?.pause();
@@ -152,12 +164,29 @@ export function ChallengeScreen({
     let camera: CameraSession | null = null;
     let provider: PoseProvider | null = null;
     let cancelLoop: (() => void) | null = null;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      cancelLoop?.();
+      provider?.stop();
+      camera?.stop();
+    };
     try {
       camera = await cameraStarter(cameraVideo, {
         videoConstraints: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
       });
+      if (!mountedRef.current) {
+        camera.stop();
+        return;
+      }
       provider = providerFactory();
       await provider.start();
+      if (!mountedRef.current) {
+        provider.stop();
+        camera.stop();
+        return;
+      }
       cancelLoop = poseLoop({
         video: cameraVideo,
         provider,
@@ -172,26 +201,23 @@ export function ChallengeScreen({
           }
         },
       });
-      releaseRef.current = () => {
-        cancelLoop?.();
-        provider?.stop();
-        camera?.stop();
-      };
+      releaseRef.current = release;
       setCameraStatus("摄像头已开启");
       await play();
+      if (!mountedRef.current) {
+        release();
+        return;
+      }
       setPhase("active");
     } catch (error) {
-      cancelLoop?.();
-      provider?.stop();
-      camera?.stop();
+      release();
+      if (!mountedRef.current) return;
       setCameraStatus(error instanceof DOMException && error.name === "NotAllowedError"
         ? "摄像头权限被拒绝，请在浏览器设置中允许访问后重试"
         : "摄像头启动失败，请重试");
       setPhase("camera-error");
     }
   }, [cameraStarter, phase, play, poseLoop, providerFactory, restart, togglePlayback]);
-
-  useEffect(() => () => releaseRef.current?.(), []);
 
   return (
     <main className="challenge-stage challenge-stage--live challenge-stage--camera-fullscreen">
