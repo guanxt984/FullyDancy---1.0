@@ -27,6 +27,33 @@ html, body, #root {
 body { min-height: 100dvh; background: var(--stage-bg); }
 button { font: inherit; }
 
+.skip-action {
+  position: fixed;
+  right: max(var(--safe-x), env(safe-area-inset-right));
+  bottom: max(var(--safe-y), env(safe-area-inset-bottom));
+  z-index: 8;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--stage-text);
+  border-radius: 999px;
+  color: var(--stage-text);
+  background: transparent;
+  cursor: pointer;
+  transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease;
+}
+
+.skip-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: oklch(0.2 0.03 115 / 0.56);
+}
+
+.skip-action:focus-visible {
+  outline: 3px solid var(--stage-text);
+  outline-offset: 3px;
+}
+
 .prototype-stage, .analysis-preview {
   width: 100%;
   min-height: 100dvh;
