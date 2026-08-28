@@ -32,6 +32,8 @@ const calibrationSteps = [
 const skeletonLines = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]] as const;
 const visibilityThreshold = 0.25;
 const defaultVideoSize = { width: 16, height: 9 };
+const createDefaultProvider = () => new MediaPipePoseProvider();
+const getCurrentTime = () => Date.now();
 
 export interface CalibrationScreenProps {
   chartCount: number;
@@ -109,21 +111,24 @@ export function CalibrationScreen({
   onSkip,
   onComplete,
   cameraStarter = startCamera,
-  providerFactory = () => new MediaPipePoseProvider(),
+  providerFactory = createDefaultProvider,
   poseLoop = runPoseLoop,
-  now = () => Date.now(),
+  now = getCurrentTime,
   stepDurationMs = 3000,
 }: CalibrationScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const releaseRef = useRef<(() => void) | null>(null);
+  const cameraReleaseRef = useRef<(() => void) | null>(null);
+  const providerReleaseRef = useRef<(() => void) | null>(null);
   const cancelLoopRef = useRef<(() => void) | null>(null);
+  const introTimerRef = useRef<number | null>(null);
+  const runIdRef = useRef(0);
+  const mountedRef = useRef(true);
   const fullBodyFramesRef = useRef<PoseFrame[]>([]);
   const starPoseFramesRef = useRef<PoseFrame[]>([]);
   const squatFramesRef = useRef<PoseFrame[]>([]);
   const stepIndexRef = useRef(0);
   const readySinceRef = useRef<number | null>(null);
   const introVisibleRef = useRef(true);
-  const autoStartedRef = useRef(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [introVisible, setIntroVisible] = useState(true);
   const [instruction, setInstruction] = useState<string>(calibrationSteps[0].copy);
@@ -134,13 +139,22 @@ export function CalibrationScreen({
   const completed = Boolean(profile);
   const progressPercent = useMemo(() => completed ? 100 : ((stepIndex + 1) / (calibrationSteps.length + 1)) * 100, [completed, stepIndex]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback((updateState = true) => {
+    runIdRef.current += 1;
+    if (introTimerRef.current !== null) {
+      window.clearTimeout(introTimerRef.current);
+      introTimerRef.current = null;
+    }
     cancelLoopRef.current?.();
     cancelLoopRef.current = null;
-    releaseRef.current?.();
-    releaseRef.current = null;
+    providerReleaseRef.current?.();
+    providerReleaseRef.current = null;
+    cameraReleaseRef.current?.();
+    cameraReleaseRef.current = null;
+    const video = videoRef.current;
+    if (video && !video.paused) video.pause();
     readySinceRef.current = null;
-    setRunning(false);
+    if (updateState && mountedRef.current) setRunning(false);
   }, []);
 
   const syncVideoSize = useCallback(() => {
@@ -170,6 +184,7 @@ export function CalibrationScreen({
     const video = videoRef.current;
     if (!video) return;
     stop();
+    const runId = ++runIdRef.current;
     fullBodyFramesRef.current = [];
     starPoseFramesRef.current = [];
     squatFramesRef.current = [];
@@ -183,7 +198,9 @@ export function CalibrationScreen({
     setStepIndex(0);
     stepIndexRef.current = 0;
 
-    window.setTimeout(() => {
+    introTimerRef.current = window.setTimeout(() => {
+      introTimerRef.current = null;
+      if (!mountedRef.current || runIdRef.current !== runId) return;
       introVisibleRef.current = false;
       setIntroVisible(false);
       setInstruction((current) => current === calibrationSteps[0].copy ? "正在识别身体，请站到画面中央。" : current);
@@ -193,16 +210,39 @@ export function CalibrationScreen({
     let provider: PoseProvider | null = null;
     try {
       camera = await cameraStarter(video);
-      provider = providerFactory();
-      await provider.start();
-      releaseRef.current = () => {
-        provider?.stop();
+      let cameraReleased = false;
+      const releaseCamera = () => {
+        if (cameraReleased) return;
+        cameraReleased = true;
         camera?.stop();
       };
-      cancelLoopRef.current = poseLoop({
+      cameraReleaseRef.current = releaseCamera;
+      if (!mountedRef.current || runIdRef.current !== runId) {
+        releaseCamera();
+        if (cameraReleaseRef.current === releaseCamera) cameraReleaseRef.current = null;
+        return;
+      }
+      provider = providerFactory();
+      let providerReleased = false;
+      const releaseProvider = () => {
+        if (providerReleased) return;
+        providerReleased = true;
+        provider?.stop();
+      };
+      providerReleaseRef.current = releaseProvider;
+      await provider.start();
+      if (!mountedRef.current || runIdRef.current !== runId) {
+        releaseProvider();
+        releaseCamera();
+        if (providerReleaseRef.current === releaseProvider) providerReleaseRef.current = null;
+        if (cameraReleaseRef.current === releaseCamera) cameraReleaseRef.current = null;
+        return;
+      }
+      const cancelLoop = poseLoop({
         video,
         provider,
         onFrame(frame) {
+          if (!mountedRef.current || runIdRef.current !== runId) return;
           syncVideoSize();
           setLatestFrame(frame);
           if (introVisibleRef.current) return;
@@ -226,20 +266,32 @@ export function CalibrationScreen({
           if (elapsed >= stepDurationMs) completeReadyStep(activeStep);
         },
       });
+      cancelLoopRef.current = cancelLoop;
+      if (!mountedRef.current || runIdRef.current !== runId) {
+        cancelLoop();
+        if (cancelLoopRef.current === cancelLoop) cancelLoopRef.current = null;
+      }
     } catch (error) {
-      setRunning(false);
+      if (!mountedRef.current || runIdRef.current !== runId) return;
+      stop();
       setIntroVisible(false);
       setInstruction(`摄像头启动失败：${error instanceof Error ? error.message : "请检查摄像头权限"}`);
     }
   }, [cameraStarter, completeReadyStep, now, poseLoop, providerFactory, stepDurationMs, stop, syncVideoSize]);
 
   useEffect(() => {
-    if (autoStartedRef.current) return;
-    autoStartedRef.current = true;
+    mountedRef.current = true;
     void start();
-  }, [start]);
+    return () => {
+      mountedRef.current = false;
+      stop(false);
+    };
+  }, [start, stop]);
 
-  useEffect(() => stop, [stop]);
+  const handleSkip = useCallback(() => {
+    stop();
+    onSkip();
+  }, [onSkip, stop]);
 
   return (
     <main className="calibration-stage calibration-stage--fullscreen">
@@ -278,7 +330,7 @@ export function CalibrationScreen({
           </div>
         </div>
       </section>
-      <SkipAction onSkip={onSkip} />
+      <SkipAction onSkip={handleSkip} />
     </main>
   );
 }

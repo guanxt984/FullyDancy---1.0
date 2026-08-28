@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { PoseFrame } from "../domain/types";
 import type { PoseProvider } from "../pose/types";
@@ -49,6 +50,134 @@ describe("CalibrationScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "跳过" }));
 
     expect(onSkip).toHaveBeenCalledOnce();
+  });
+
+  it("releases a camera that resolves after calibration was skipped and does not start the provider", async () => {
+    let resolveCamera!: (session: { stream: MediaStream; stop: ReturnType<typeof vi.fn> }) => void;
+    const cameraStop = vi.fn();
+    const cameraStarter = vi.fn(() => new Promise<{ stream: MediaStream; stop: ReturnType<typeof vi.fn> }>((resolve) => {
+      resolveCamera = resolve;
+    }));
+    const provider: PoseProvider = { start: vi.fn(async () => undefined), detect: vi.fn(() => null), stop: vi.fn() };
+    const view = render(
+      <CalibrationScreen chartCount={3} onSkip={vi.fn()} cameraStarter={cameraStarter} providerFactory={() => provider} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    view.unmount();
+    await act(async () => {
+      resolveCamera({ stream: {} as MediaStream, stop: cameraStop });
+      await Promise.resolve();
+    });
+
+    expect(cameraStop).toHaveBeenCalledOnce();
+    expect(provider.start).not.toHaveBeenCalled();
+    expect(provider.stop).not.toHaveBeenCalled();
+  });
+
+  it("immediately releases camera and provider when skipped while provider startup is pending", async () => {
+    const cameraStop = vi.fn();
+    const provider: PoseProvider = {
+      start: vi.fn(() => new Promise<never>(() => undefined)),
+      detect: vi.fn(() => null),
+      stop: vi.fn(),
+    };
+    const view = render(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={vi.fn()}
+        cameraStarter={vi.fn(async () => ({ stream: {} as MediaStream, stop: cameraStop }))}
+        providerFactory={() => provider}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    view.unmount();
+
+    expect(cameraStop).toHaveBeenCalledOnce();
+    expect(provider.stop).toHaveBeenCalledOnce();
+  });
+
+  it("clears the intro timer on skip and never completes calibration afterward", async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+    const view = render(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={vi.fn()}
+        onComplete={onComplete}
+        cameraStarter={vi.fn(() => new Promise<never>(() => undefined))}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    view.unmount();
+    await act(async () => {
+      vi.runAllTimers();
+    });
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("starts a fresh calibration session after the StrictMode effect cleanup", async () => {
+    const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
+    const providerFactory = vi.fn((): PoseProvider => ({
+      start: vi.fn(async () => undefined),
+      detect: vi.fn(() => null),
+      stop: vi.fn(),
+    }));
+
+    render(
+      <StrictMode>
+        <CalibrationScreen
+          chartCount={3}
+          onSkip={vi.fn()}
+          cameraStarter={cameraStarter}
+          providerFactory={providerFactory}
+          poseLoop={vi.fn(() => vi.fn())}
+        />
+      </StrictMode>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cameraStarter).toHaveBeenCalledTimes(2);
+    expect(providerFactory).toHaveBeenCalledOnce();
+  });
+
+  it("releases acquired resources when provider startup fails", async () => {
+    const cameraStop = vi.fn();
+    const provider: PoseProvider = {
+      start: vi.fn(async () => { throw new Error("model failed"); }),
+      detect: vi.fn(() => null),
+      stop: vi.fn(),
+    };
+    render(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={vi.fn()}
+        cameraStarter={vi.fn(async () => ({ stream: {} as MediaStream, stop: cameraStop }))}
+        providerFactory={() => provider}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cameraStop).toHaveBeenCalledOnce();
+    expect(provider.stop).toHaveBeenCalledOnce();
   });
 
   it("shows one large instruction line, then advances with a continuous hold countdown", async () => {
