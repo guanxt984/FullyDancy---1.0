@@ -21,7 +21,7 @@ interface AnalysisScreenProps {
 }
 
 type AnalysisState = "idle" | "loading" | "editing" | "error";
-type PoseCacheState = "idle" | "extracting" | "ready" | "sparse";
+type PoseCacheState = "idle" | "extracting" | "ready" | "failed";
 type MaybeClosableAudioContext = Pick<BaseAudioContext, "decodeAudioData"> & { close?: () => Promise<void> };
 
 const backLabel = "\u8fd4\u56de";
@@ -44,7 +44,8 @@ const deleteLabel = "删除卡点";
 const confirmLabel = "进入下一步";
 const loadError = "\u5173\u5361\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5";
 const poseExtractingCopy = "\u6b63\u5728\u63d0\u53d6\u793a\u8303\u9aa8\u67b6\u2026";
-const poseSparseCopy = "\u9aa8\u67b6\u8bc6\u522b\u8f83\u5c11\uff0c\u53ef\u7ee7\u7eed\u624b\u52a8\u6807\u6ce8";
+const poseFailedCopy = "\u793a\u8303\u9aa8\u67b6\u63d0\u53d6\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5";
+const retryPoseLabel = "\u91cd\u8bd5\u9aa8\u67b6\u63d0\u53d6";
 const actionLabels: Record<ActionRequirement, string> = {
   rhythm: "\u5361\u8282\u594f",
   open: "手臂伸直",
@@ -148,14 +149,32 @@ export function AnalysisScreen({ level, onConfirm, onSkip, onBack }: AnalysisScr
     ? poseExtractingCopy
     : poseCacheState === "ready"
       ? `\u5df2\u63d0\u53d6 ${poseCache.length} \u5e27\u793a\u8303\u9aa8\u67b6`
-      : poseCacheState === "sparse"
-        ? poseSparseCopy
+      : poseCacheState === "failed"
+        ? poseFailedCopy
         : "";
 
   useEffect(() => {
     setPoseCache([]);
     setPoseCacheState("idle");
   }, [level.videoUrl]);
+
+  async function extractPoseCache(beats: BeatPoint[]) {
+    setPoseCache([]);
+    setPoseCacheState("extracting");
+    try {
+      const cache = await extractDemoPoseCache(level.videoUrl, Math.max(videoRef.current?.duration || 0, ...beats.map((beat) => beat.timeSec)));
+      if (cache.length === 0) {
+        setPoseCacheState("failed");
+        return;
+      }
+      setPoseCache(cache);
+      setPoseCacheState("ready");
+      setChart((current) => inferBeatActionsFromPose(current, cache));
+    } catch {
+      setPoseCache([]);
+      setPoseCacheState("failed");
+    }
+  }
 
   async function analyze() {
     setState("loading");
@@ -168,15 +187,7 @@ export function AnalysisScreen({ level, onConfirm, onSkip, onBack }: AnalysisScr
       setChart(beats);
       setActiveBeatId(beats.find((beat) => beat.enabled)?.id ?? null);
       setState("editing");
-      setPoseCacheState("extracting");
-      void extractDemoPoseCache(level.videoUrl, Math.max(videoRef.current?.duration || 0, ...beats.map((beat) => beat.timeSec))).then((cache) => {
-        setPoseCache(cache);
-        setPoseCacheState(cache.length > 0 ? "ready" : "sparse");
-        setChart((current) => inferBeatActionsFromPose(current, cache));
-      }).catch(() => {
-        setPoseCache([]);
-        setPoseCacheState("sparse");
-      });
+      void extractPoseCache(beats);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : loadError);
       setState("error");
@@ -342,8 +353,13 @@ export function AnalysisScreen({ level, onConfirm, onSkip, onBack }: AnalysisScr
                 ) : null}
               </div>
               <div className="timeline-footer">
-                {poseStatusCopy ? <p role="status" className="pose-cache-status">{poseStatusCopy}</p> : <span />}
-                {enabledChart.length > 0 ? <button className="primary-action analysis-primary timeline-confirm" type="button" onClick={() => onConfirm({ chart: enabledChart, poseCache })}>{confirmLabel}</button> : <p className="analysis-status">{emptyCopy}</p>}
+                {poseCacheState === "failed" ? (
+                  <div className="pose-cache-status" role="alert">
+                    <span>{poseStatusCopy}</span>
+                    <button type="button" onClick={() => void extractPoseCache(chart)}>{retryPoseLabel}</button>
+                  </div>
+                ) : poseStatusCopy ? <p role="status" className="pose-cache-status">{poseStatusCopy}</p> : <span />}
+                {enabledChart.length > 0 ? <button className="primary-action analysis-primary timeline-confirm" type="button" disabled={poseCacheState !== "ready"} onClick={() => onConfirm({ chart: enabledChart, poseCache })}>{confirmLabel}</button> : <p className="analysis-status">{emptyCopy}</p>}
               </div>
             </>
           ) : null}

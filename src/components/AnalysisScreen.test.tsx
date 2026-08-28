@@ -35,9 +35,70 @@ vi.mock("../analysis/demoPoseCache", () => ({
   nearestPoseFrame: vi.fn((cache: DemoPoseCache, timeSec: number) => cache.find((frame) => Math.abs(frame.captureTimeSec - timeSec) <= 0.25) ?? null),
 }));
 
+import { extractDemoPoseCache } from "../analysis/demoPoseCache";
 import { AnalysisScreen } from "./AnalysisScreen";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("AnalysisScreen", () => {
+  it("keeps confirmation disabled while the demo pose cache is still extracting", async () => {
+    const pending = deferred<DemoPoseCache>();
+    vi.mocked(extractDemoPoseCache).mockReturnValueOnce(pending.promise);
+    const onConfirm = vi.fn();
+    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={onConfirm} onBack={vi.fn()} onSkip={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "分析卡点" }));
+    await screen.findByRole("group", { name: "卡点时间轴" });
+    const confirm = screen.getByRole("button", { name: "进入下一步" });
+
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    pending.resolve(openArmCache);
+    await waitFor(() => expect(confirm).toBeEnabled());
+  });
+
+  it("confirms with the resolved demo pose cache", async () => {
+    const pending = deferred<DemoPoseCache>();
+    vi.mocked(extractDemoPoseCache).mockReturnValueOnce(pending.promise);
+    const onConfirm = vi.fn();
+    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={onConfirm} onBack={vi.fn()} onSkip={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "分析卡点" }));
+    await screen.findByRole("group", { name: "卡点时间轴" });
+    pending.resolve(openArmCache);
+    const confirm = screen.getByRole("button", { name: "进入下一步" });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ poseCache: openArmCache }));
+  });
+
+  it.each([
+    ["fails", () => Promise.reject(new Error("pose failed"))],
+    ["returns no frames", () => Promise.resolve([] as DemoPoseCache)],
+  ])("offers a visible retry when pose extraction %s", async (_case, extraction) => {
+    vi.mocked(extractDemoPoseCache).mockImplementationOnce(extraction);
+    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "分析卡点" }));
+    await screen.findByRole("group", { name: "卡点时间轴" });
+
+    const retry = await screen.findByRole("button", { name: "重试骨架提取" });
+    expect(screen.getByRole("button", { name: "进入下一步" })).toBeDisabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.getByRole("button", { name: "进入下一步" })).toBeEnabled());
+  });
+
   it("skips with the current analysis result", async () => {
     const onSkip = vi.fn();
     render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={onSkip} />);
