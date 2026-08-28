@@ -12,6 +12,67 @@ import { ChallengeScreen } from "./ChallengeScreen";
 
 const styles = readFileSync(`${cwd()}/src/styles.css`, "utf8");
 
+interface CssRuleContract {
+  selectors: string[];
+  declarations: Array<{ property: string; value: string }>;
+}
+
+function matchingBraceIndex(source: string, openIndex: number) {
+  let depth = 1;
+  let quote = "";
+  for (let index = openIndex + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return index;
+  }
+  return -1;
+}
+
+function collectTransportRules(source: string): CssRuleContract[] {
+  const target = ".challenge-transport--floating";
+  const rules: CssRuleContract[] = [];
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  function visit(block: string) {
+    let cursor = 0;
+    while (cursor < block.length) {
+      const openIndex = block.indexOf("{", cursor);
+      if (openIndex < 0) return;
+      const closeIndex = matchingBraceIndex(block, openIndex);
+      if (closeIndex < 0) return;
+      const prelude = block.slice(cursor, openIndex).trim();
+      const body = block.slice(openIndex + 1, closeIndex);
+
+      if (prelude.startsWith("@")) {
+        visit(body);
+      } else {
+        const selectors = prelude.split(",").map((selector) => selector.trim()).filter(Boolean);
+        if (selectors.includes(target)) {
+          const declarations = body.split(";").flatMap((declaration) => {
+            const colonIndex = declaration.indexOf(":");
+            if (colonIndex < 0) return [];
+            return [{
+              property: declaration.slice(0, colonIndex).trim().toLowerCase(),
+              value: declaration.slice(colonIndex + 1).trim(),
+            }];
+          });
+          rules.push({ selectors, declarations });
+        }
+      }
+      cursor = closeIndex + 1;
+    }
+  }
+
+  visit(withoutComments);
+  return rules;
+}
+
 const level: BuiltInLevel = { id: "level-1", title: "8月3日舞蹈挑战", videoUrl: "/levels/level-1.mp4", durationSec: 13 };
 const chart: BeatPoint[] = [{ id: "beat-1", beatIndex: 1, timeSec: 0.68, salience: 1, enabled: true, action: "rhythm" }];
 const poseCache: DemoPoseCache = [{ captureTimeSec: 0, landmarks: Array.from({ length: 33 }, (_, index) => ({ x: 0.35 + (index % 4) * 0.08, y: 0.18 + Math.floor(index / 4) * 0.07, z: 0, visibility: 0.95 })) }];
@@ -234,11 +295,34 @@ describe("ChallengeScreen", () => {
   });
 
   it("lets safe-area insets define the floating transport width without mobile overflow", () => {
-    const transportRules = [...styles.matchAll(/\.challenge-transport--floating\s*\{([^}]*)\}/g)].map((match) => match[1]);
+    const transportRules = collectTransportRules(styles);
+    const declarations = transportRules.flatMap((rule) => rule.declarations);
+    const safeAreaRule = transportRules.find((rule) => {
+      const valueFor = (property: string) => rule.declarations.find((declaration) => declaration.property === property)?.value ?? "";
+      return valueFor("width") === "auto"
+        && valueFor("left").includes("--challenge-edge")
+        && valueFor("left").includes("safe-area-inset-left")
+        && valueFor("right").includes("--challenge-edge")
+        && valueFor("right").includes("safe-area-inset-right");
+    });
 
-    expect(transportRules).toContainEqual(expect.stringMatching(/width:\s*auto/));
-    expect(transportRules).toContainEqual(expect.stringMatching(/left:\s*max\(var\(--challenge-edge\),\s*env\(safe-area-inset-left\)\)/));
-    expect(transportRules).toContainEqual(expect.stringMatching(/right:\s*max\(var\(--challenge-edge\),\s*env\(safe-area-inset-right\)\)/));
-    expect(transportRules).not.toContainEqual(expect.stringMatching(/width:\s*100%/));
+    expect.soft(safeAreaRule).toBeDefined();
+    expect.soft(declarations).not.toContainEqual({ property: "width", value: "100%" });
+  });
+
+  it("ignores commented fake rules and finds the exact selector inside grouped media rules", () => {
+    const fixture = `
+      /* .challenge-transport--floating { width: auto; } */
+      @media (max-width: 800px) {
+        .other-control, .challenge-transport--floating { width: 100%; }
+      }
+    `;
+
+    expect(collectTransportRules(fixture)).toEqual([
+      {
+        selectors: [".other-control", ".challenge-transport--floating"],
+        declarations: [{ property: "width", value: "100%" }],
+      },
+    ]);
   });
 });
