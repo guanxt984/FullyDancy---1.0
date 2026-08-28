@@ -35,6 +35,16 @@ const defaultVideoSize = { width: 16, height: 9 };
 const createDefaultProvider = () => new MediaPipePoseProvider();
 const getCurrentTime = () => Date.now();
 
+interface OwnedRelease {
+  runId: number;
+  release: () => void;
+}
+
+interface OwnedTimer {
+  runId: number;
+  id: number;
+}
+
 export interface CalibrationScreenProps {
   chartCount: number;
   onSkip: () => void;
@@ -117,10 +127,10 @@ export function CalibrationScreen({
   stepDurationMs = 3000,
 }: CalibrationScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const cameraReleaseRef = useRef<(() => void) | null>(null);
-  const providerReleaseRef = useRef<(() => void) | null>(null);
-  const cancelLoopRef = useRef<(() => void) | null>(null);
-  const introTimerRef = useRef<number | null>(null);
+  const cameraReleaseRef = useRef<OwnedRelease | null>(null);
+  const providerReleaseRef = useRef<OwnedRelease | null>(null);
+  const cancelLoopRef = useRef<OwnedRelease | null>(null);
+  const introTimerRef = useRef<OwnedTimer | null>(null);
   const runIdRef = useRef(0);
   const mountedRef = useRef(true);
   const fullBodyFramesRef = useRef<PoseFrame[]>([]);
@@ -141,15 +151,15 @@ export function CalibrationScreen({
 
   const stop = useCallback((updateState = true) => {
     runIdRef.current += 1;
-    if (introTimerRef.current !== null) {
-      window.clearTimeout(introTimerRef.current);
+    if (introTimerRef.current) {
+      window.clearTimeout(introTimerRef.current.id);
       introTimerRef.current = null;
     }
-    cancelLoopRef.current?.();
+    cancelLoopRef.current?.release();
     cancelLoopRef.current = null;
-    providerReleaseRef.current?.();
+    providerReleaseRef.current?.release();
     providerReleaseRef.current = null;
-    cameraReleaseRef.current?.();
+    cameraReleaseRef.current?.release();
     cameraReleaseRef.current = null;
     const video = videoRef.current;
     if (video && !video.paused) video.pause();
@@ -198,13 +208,14 @@ export function CalibrationScreen({
     setStepIndex(0);
     stepIndexRef.current = 0;
 
-    introTimerRef.current = window.setTimeout(() => {
-      introTimerRef.current = null;
+    const introTimerId = window.setTimeout(() => {
+      if (introTimerRef.current?.runId === runId) introTimerRef.current = null;
       if (!mountedRef.current || runIdRef.current !== runId) return;
       introVisibleRef.current = false;
       setIntroVisible(false);
       setInstruction((current) => current === calibrationSteps[0].copy ? "正在识别身体，请站到画面中央。" : current);
     }, introDurationMs);
+    introTimerRef.current = { runId, id: introTimerId };
 
     let camera: CameraSession | null = null;
     let provider: PoseProvider | null = null;
@@ -216,12 +227,11 @@ export function CalibrationScreen({
         cameraReleased = true;
         camera?.stop();
       };
-      cameraReleaseRef.current = releaseCamera;
       if (!mountedRef.current || runIdRef.current !== runId) {
         releaseCamera();
-        if (cameraReleaseRef.current === releaseCamera) cameraReleaseRef.current = null;
         return;
       }
+      cameraReleaseRef.current = { runId, release: releaseCamera };
       provider = providerFactory();
       let providerReleased = false;
       const releaseProvider = () => {
@@ -229,13 +239,13 @@ export function CalibrationScreen({
         providerReleased = true;
         provider?.stop();
       };
-      providerReleaseRef.current = releaseProvider;
+      providerReleaseRef.current = { runId, release: releaseProvider };
       await provider.start();
       if (!mountedRef.current || runIdRef.current !== runId) {
         releaseProvider();
         releaseCamera();
-        if (providerReleaseRef.current === releaseProvider) providerReleaseRef.current = null;
-        if (cameraReleaseRef.current === releaseCamera) cameraReleaseRef.current = null;
+        if (providerReleaseRef.current?.runId === runId) providerReleaseRef.current = null;
+        if (cameraReleaseRef.current?.runId === runId) cameraReleaseRef.current = null;
         return;
       }
       const cancelLoop = poseLoop({
@@ -266,10 +276,10 @@ export function CalibrationScreen({
           if (elapsed >= stepDurationMs) completeReadyStep(activeStep);
         },
       });
-      cancelLoopRef.current = cancelLoop;
+      cancelLoopRef.current = { runId, release: cancelLoop };
       if (!mountedRef.current || runIdRef.current !== runId) {
         cancelLoop();
-        if (cancelLoopRef.current === cancelLoop) cancelLoopRef.current = null;
+        if (cancelLoopRef.current?.runId === runId) cancelLoopRef.current = null;
       }
     } catch (error) {
       if (!mountedRef.current || runIdRef.current !== runId) return;

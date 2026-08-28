@@ -156,6 +156,55 @@ describe("CalibrationScreen", () => {
     expect(providerFactory).toHaveBeenCalledOnce();
   });
 
+  it("does not let a late camera from an obsolete run overwrite the current run resources", async () => {
+    type Session = { stream: MediaStream; stop: ReturnType<typeof vi.fn> };
+    const pending: Array<(session: Session) => void> = [];
+    const cameraStarter = vi.fn(() => new Promise<Session>((resolve) => pending.push(resolve)));
+    const firstCameraStop = vi.fn();
+    const secondCameraStop = vi.fn();
+    const provider: PoseProvider = {
+      start: vi.fn(async () => undefined),
+      detect: vi.fn(() => null),
+      stop: vi.fn(),
+    };
+    const cancelLoop = vi.fn();
+    const poseLoop = vi.fn(() => cancelLoop);
+    const view = render(
+      <StrictMode>
+        <CalibrationScreen
+          chartCount={3}
+          onSkip={vi.fn()}
+          cameraStarter={cameraStarter}
+          providerFactory={() => provider}
+          poseLoop={poseLoop}
+        />
+      </StrictMode>,
+    );
+    expect(cameraStarter).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pending[1]({ stream: {} as MediaStream, stop: secondCameraStop });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(provider.start).toHaveBeenCalledOnce();
+    expect(poseLoop).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      pending[0]({ stream: {} as MediaStream, stop: firstCameraStop });
+      await Promise.resolve();
+    });
+    expect(firstCameraStop).toHaveBeenCalledOnce();
+    expect(secondCameraStop).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    view.unmount();
+
+    expect(secondCameraStop).toHaveBeenCalledOnce();
+    expect(provider.stop).toHaveBeenCalledOnce();
+    expect(cancelLoop).toHaveBeenCalledOnce();
+  });
+
   it("releases acquired resources when provider startup fails", async () => {
     const cameraStop = vi.fn();
     const provider: PoseProvider = {
