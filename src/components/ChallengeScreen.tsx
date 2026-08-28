@@ -91,8 +91,13 @@ export function ChallengeScreen({
 }: ChallengeScreenProps) {
   const cameraRef = useRef<HTMLVideoElement>(null);
   const mediaRef = useRef<HTMLVideoElement>(null);
+  const cameraLayerRef = useRef<HTMLElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const challengeShellRef = useRef<HTMLElement>(null);
+  const retryCameraRef = useRef<HTMLButtonElement>(null);
   const releaseRef = useRef<(() => void) | null>(null);
   const mountedRef = useRef(false);
+  const playingRef = useRef(false);
   const extractionPromiseRef = useRef<{
     videoUrl: string;
     durationSec: number;
@@ -163,6 +168,7 @@ export function ChallengeScreen({
 
   const pause = useCallback(() => {
     mediaRef.current?.pause();
+    playingRef.current = false;
     setPlaying(false);
   }, []);
 
@@ -171,13 +177,14 @@ export function ChallengeScreen({
     if (!media) return;
     await media.play();
     if (!mountedRef.current) return;
+    playingRef.current = true;
     setPlaying(true);
   }, []);
 
   const togglePlayback = useCallback(() => {
-    if (playing) pause();
+    if (playingRef.current) pause();
     else void play();
-  }, [pause, play, playing]);
+  }, [pause, play]);
 
   const restart = useCallback(() => {
     const media = mediaRef.current;
@@ -196,22 +203,27 @@ export function ChallengeScreen({
     let camera: CameraSession | null = null;
     let provider: PoseProvider | null = null;
     let cancelLoop: (() => void) | null = null;
-    let released = false;
-    let mediaStarted = false;
+    let mediaReleased = false;
+    let mediaStarted = true;
     const release = () => {
-      if (released) return;
-      released = true;
-      if (mediaStarted) media.pause();
+      if (mediaStarted && !mediaReleased) {
+        mediaReleased = true;
+        media.pause();
+      }
       cancelLoop?.();
+      cancelLoop = null;
       provider?.stop();
+      provider = null;
       camera?.stop();
+      camera = null;
       if (releaseRef.current === release) releaseRef.current = null;
     };
+    releaseRef.current = release;
+    const mediaPlayPromise = play().then(() => true).catch(() => false);
     try {
       camera = await cameraStarter(cameraVideo, {
         videoConstraints: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
       });
-      releaseRef.current = release;
       if (!mountedRef.current) {
         release();
         return;
@@ -238,11 +250,13 @@ export function ChallengeScreen({
       });
       releaseRef.current = release;
       setCameraStatus("摄像头已开启");
-      mediaStarted = true;
-      await play();
+      const playbackStarted = await mediaPlayPromise;
       if (!mountedRef.current) {
         release();
         return;
+      }
+      if (!playbackStarted) {
+        setGestureStatus("媒体未能自动播放，请点击继续；也可使用单手手势开始");
       }
       setPhase("active");
     } catch (error) {
@@ -255,6 +269,17 @@ export function ChallengeScreen({
     }
   }, [cameraStarter, phase, play, poseLoop, providerFactory, restart, togglePlayback]);
 
+  useEffect(() => {
+    if (phase === "camera-error") retryCameraRef.current?.focus();
+  }, [phase]);
+
+  useEffect(() => {
+    const backgroundLayers = [cameraLayerRef.current, headerRef.current, challengeShellRef.current];
+    backgroundLayers.forEach((layer) => {
+      if (layer) layer.inert = phase === "instructions";
+    });
+  }, [phase]);
+
   return (
     <main className="challenge-stage challenge-stage--live challenge-stage--camera-fullscreen">
       <video
@@ -265,19 +290,28 @@ export function ChallengeScreen({
         preload="auto"
         playsInline
         onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
+        onPlay={() => {
+          playingRef.current = true;
+          setPlaying(true);
+        }}
+        onPause={() => {
+          playingRef.current = false;
+          setPlaying(false);
+        }}
+        onEnded={() => {
+          playingRef.current = false;
+          setPlaying(false);
+        }}
       />
-      <section className="challenge-user-camera-card challenge-user-camera-card--background" aria-label={cameraTitle}>
+      <section ref={cameraLayerRef} className="challenge-user-camera-card challenge-user-camera-card--background" aria-label={cameraTitle}>
         <video ref={cameraRef} className="challenge-camera-video" aria-label={cameraLabel} autoPlay muted playsInline />
         {phase !== "instructions" ? <span className="challenge-camera-status">{cameraStatus}</span> : null}
       </section>
-      <header className="stage-header challenge-stage__header">
-        <button className="back-action" type="button" onClick={onBack}>{backLabel}</button>
+      <header ref={headerRef} className="stage-header challenge-stage__header">
+        <button className="back-action" type="button" tabIndex={phase === "instructions" ? -1 : undefined} onClick={onBack}>{backLabel}</button>
       </header>
 
-      <section className="challenge-shell challenge-shell--live" aria-label="舞蹈挑战">
+      <section ref={challengeShellRef} className="challenge-shell challenge-shell--live" aria-label="舞蹈挑战">
         <section className="challenge-reference-overlay challenge-reference-overlay--full-height" aria-label={referenceTitle}>
           <div className="challenge-reference-stage">
             {activeFrame ? <DemoSkeleton frame={activeFrame} /> : poseExtractionState === "error" ? (
@@ -290,7 +324,7 @@ export function ChallengeScreen({
           {phase === "active" ? <button type="button" onClick={togglePlayback}>{playing ? "暂停" : "继续"}</button> : null}
           {phase === "active" ? <button type="button" onClick={restart}>重新开始</button> : null}
           {phase === "active" ? <span aria-live="polite">{gestureStatus}</span> : null}
-          {phase === "camera-error" ? <button type="button" onClick={() => void startChallenge()}>重试摄像头</button> : null}
+          {phase === "camera-error" ? <button ref={retryCameraRef} type="button" onClick={() => void startChallenge()}>重试摄像头</button> : null}
         </div>
       </section>
 
@@ -301,7 +335,7 @@ export function ChallengeScreen({
             <p>跟随绿色骨架完成动作</p>
             <p>单手张开保持 0.6 秒：播放或暂停</p>
             <p>双手举过头顶保持 1 秒：重新开始</p>
-            <button className="primary-action" type="button" onClick={() => void startChallenge()}>开始舞蹈</button>
+            <button className="primary-action" type="button" autoFocus onClick={() => void startChallenge()}>开始舞蹈</button>
           </section>
         </div>
       ) : null}

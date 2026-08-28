@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DemoPoseCache } from "../analysis/demoPoseCache";
 import type { BeatPoint } from "../domain/types";
 import type { BuiltInLevel } from "../levels/builtInLevel";
+import type { PoseLoopOptions } from "../pose/poseLoop";
 import { ChallengeScreen } from "./ChallengeScreen";
 
 const styles = readFileSync(`${cwd()}/src/styles.css`, "utf8");
@@ -79,6 +80,20 @@ const poseCache: DemoPoseCache = [{ captureTimeSec: 0, landmarks: Array.from({ l
 const providerFactory = () => ({ start: vi.fn(async () => undefined), detect: vi.fn(() => null), stop: vi.fn() });
 const poseLoop = vi.fn(() => vi.fn());
 
+function gestureFrame(kind: "open-palm" | "neutral") {
+  const landmarks = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.7, z: 0, visibility: 0.95 }));
+  landmarks[0] = { x: 0.5, y: 0.2, z: 0, visibility: 0.95 };
+  landmarks[11] = { x: 0.42, y: 0.4, z: 0, visibility: 0.95 };
+  landmarks[12] = { x: 0.58, y: 0.4, z: 0, visibility: 0.95 };
+  if (kind === "open-palm") {
+    landmarks[15] = { x: 0.25, y: 0.45, z: 0, visibility: 0.95 };
+    landmarks[17] = { x: 0.19, y: 0.4, z: 0, visibility: 0.95 };
+    landmarks[19] = { x: 0.25, y: 0.34, z: 0, visibility: 0.95 };
+    landmarks[21] = { x: 0.31, y: 0.4, z: 0, visibility: 0.95 };
+  }
+  return { captureTimeSec: 0, landmarks };
+}
+
 function renderChallenge(overrides: Partial<React.ComponentProps<typeof ChallengeScreen>> = {}) {
   return render(<ChallengeScreen level={level} chart={chart} initialPoseCache={poseCache} onBack={vi.fn()} providerFactory={providerFactory} poseLoop={poseLoop} {...overrides} />);
 }
@@ -89,6 +104,7 @@ describe("ChallengeScreen", () => {
     renderChallenge({ cameraStarter });
     const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
     const play = vi.spyOn(media, "play").mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
     expect(screen.getByRole("dialog", { name: "舞蹈玩法" })).toBeVisible();
     expect(screen.getByText("跟随绿色骨架完成动作")).toBeVisible();
     expect(screen.getByText("单手张开保持 0.6 秒：播放或暂停")).toBeVisible();
@@ -168,6 +184,79 @@ describe("ChallengeScreen", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
+  it("attempts media playback before delayed camera startup resolves", async () => {
+    let resolveCamera!: (session: { stream: MediaStream; stop: () => void }) => void;
+    const cameraStarter = vi.fn(() => new Promise<{ stream: MediaStream; stop: () => void }>((resolve) => { resolveCamera = resolve; }));
+    renderChallenge({ cameraStarter });
+    const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
+    const play = vi.spyOn(media, "play").mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" }));
+
+    expect(play).toHaveBeenCalledOnce();
+    expect(cameraStarter).toHaveBeenCalledOnce();
+    await act(async () => resolveCamera({ stream: {} as MediaStream, stop: vi.fn() }));
+  });
+
+  it("keeps playback recoverable and does not report a camera permission error when media playback fails", async () => {
+    const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
+    renderChallenge({ cameraStarter });
+    const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
+    const play = vi.spyOn(media, "play").mockRejectedValueOnce(new DOMException("blocked", "NotAllowedError")).mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" }));
+
+    expect(await screen.findByRole("button", { name: "继续" })).toBeVisible();
+    expect(screen.queryByText(/摄像头权限被拒绝/)).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "继续" })));
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses current playback state when an open-palm gesture toggles pause and resume", async () => {
+    let onFrame!: (frame: ReturnType<typeof gestureFrame>) => void;
+    const localPoseLoop = vi.fn((options: PoseLoopOptions) => {
+      onFrame = options.onFrame!;
+      return vi.fn();
+    });
+    renderChallenge({
+      cameraStarter: vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() })),
+      poseLoop: localPoseLoop,
+    });
+    const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
+    const play = vi.spyOn(media, "play").mockResolvedValue();
+    const pause = vi.spyOn(media, "pause").mockImplementation(() => undefined);
+    const now = vi.spyOn(performance, "now");
+    fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" }));
+    await screen.findByRole("button", { name: "暂停" });
+
+    now.mockReturnValueOnce(0).mockReturnValueOnce(600);
+    act(() => { onFrame(gestureFrame("open-palm")); onFrame(gestureFrame("open-palm")); });
+    expect(pause).toHaveBeenCalledOnce();
+    act(() => onFrame(gestureFrame("neutral")));
+    now.mockReturnValueOnce(1000).mockReturnValueOnce(1600);
+    act(() => { onFrame(gestureFrame("open-palm")); onFrame(gestureFrame("open-palm")); });
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+  });
+
+  it("focuses the modal action and prevents background interaction until startup", async () => {
+    renderChallenge({ cameraStarter: vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() })) });
+    const start = screen.getByRole("button", { name: "开始舞蹈" });
+    expect(start).toHaveFocus();
+    expect(screen.getByRole("button", { name: "返回", hidden: true })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("region", { name: "舞蹈挑战" })).toHaveProperty("inert", true);
+  });
+
+  it("focuses camera retry after startup failure", async () => {
+    renderChallenge({ cameraStarter: vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError")) });
+    const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
+    vi.spyOn(media, "play").mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" }));
+    expect(await screen.findByRole("button", { name: "重试摄像头" })).toHaveFocus();
+  });
+
   it("shows only the essential controls in the active challenge HUD", async () => {
     const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
     renderChallenge({ cameraStarter });
@@ -208,13 +297,14 @@ describe("ChallengeScreen", () => {
     const view = renderChallenge({ cameraStarter, providerFactory: localProviderFactory, poseLoop: localPoseLoop });
     const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
     const play = vi.spyOn(media, "play").mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
     fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" }));
     view.unmount();
     await act(async () => resolveCamera({ stream: {} as MediaStream, stop: cameraStop }));
     expect(cameraStop).toHaveBeenCalledOnce();
     expect(localProviderFactory).not.toHaveBeenCalled();
     expect(localPoseLoop).not.toHaveBeenCalled();
-    expect(play).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledOnce();
   });
 
   it("immediately releases camera and provider when unmounted during pending provider startup", async () => {
@@ -227,18 +317,19 @@ describe("ChallengeScreen", () => {
     const view = renderChallenge({ cameraStarter, providerFactory: () => provider, poseLoop: localPoseLoop });
     const media = screen.getByLabelText("舞蹈音乐与统一时间轴") as HTMLVideoElement;
     const play = vi.spyOn(media, "play").mockResolvedValue();
+    vi.spyOn(media, "pause").mockImplementation(() => undefined);
     fireEvent.click(screen.getByRole("button", { name: "开始舞蹈" }));
     await waitFor(() => expect(provider.start).toHaveBeenCalledOnce());
     view.unmount();
     expect(providerStop).toHaveBeenCalledOnce();
     expect(cameraStop).toHaveBeenCalledOnce();
     expect(localPoseLoop).not.toHaveBeenCalled();
-    expect(play).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledOnce();
     await act(async () => resolveProvider());
     expect(providerStop).toHaveBeenCalledOnce();
     expect(cameraStop).toHaveBeenCalledOnce();
     expect(localPoseLoop).not.toHaveBeenCalled();
-    expect(play).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalledOnce();
   });
 
   it("immediately releases resources and pauses media when unmounted during pending playback", async () => {
