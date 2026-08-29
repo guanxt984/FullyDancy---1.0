@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildCalibrationProfile } from "../calibration/calibrationProfile";
 import type { CalibrationProfile, PoseFrame } from "../domain/types";
-import { startCamera, type CameraSession } from "../pose/camera";
+import { startCamera, type SharedCameraSession } from "../pose/camera";
 import { MediaPipePoseProvider } from "../pose/mediaPipePoseProvider";
 import { runPoseLoop } from "../pose/poseLoop";
 import type { PoseProvider } from "../pose/types";
@@ -40,6 +40,14 @@ interface OwnedRelease {
   release: () => void;
 }
 
+interface OwnedCamera {
+  runId: number;
+  session: SharedCameraSession;
+  video: HTMLVideoElement;
+  stopOnDispose: boolean;
+  released: boolean;
+}
+
 interface OwnedTimer {
   runId: number;
   id: number;
@@ -47,13 +55,21 @@ interface OwnedTimer {
 
 export interface CalibrationScreenProps {
   chartCount: number;
-  onSkip: () => void;
-  onComplete?: (profile: CalibrationProfile) => void;
+  onSkip: (camera: SharedCameraSession | null) => void;
+  onComplete?: (profile: CalibrationProfile, camera: SharedCameraSession) => void;
+  cameraSession?: SharedCameraSession | null;
   cameraStarter?: typeof startCamera;
   providerFactory?: () => PoseProvider;
   poseLoop?: typeof runPoseLoop;
   now?: () => number;
   stepDurationMs?: number;
+}
+
+function releaseCamera(owner: OwnedCamera, dispose: boolean) {
+  if (owner.released) return;
+  owner.released = true;
+  owner.session.detach(owner.video);
+  if (dispose && owner.stopOnDispose) owner.session.stop();
 }
 
 function isVisible(frame: PoseFrame, index: number) {
@@ -120,6 +136,7 @@ export function CalibrationScreen({
   chartCount,
   onSkip,
   onComplete,
+  cameraSession = null,
   cameraStarter = startCamera,
   providerFactory = createDefaultProvider,
   poseLoop = runPoseLoop,
@@ -127,7 +144,7 @@ export function CalibrationScreen({
   stepDurationMs = 3000,
 }: CalibrationScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const cameraReleaseRef = useRef<OwnedRelease | null>(null);
+  const cameraOwnerRef = useRef<OwnedCamera | null>(null);
   const providerReleaseRef = useRef<OwnedRelease | null>(null);
   const cancelLoopRef = useRef<OwnedRelease | null>(null);
   const introTimerRef = useRef<OwnedTimer | null>(null);
@@ -149,7 +166,7 @@ export function CalibrationScreen({
   const completed = Boolean(profile);
   const progressPercent = useMemo(() => completed ? 100 : ((stepIndex + 1) / (calibrationSteps.length + 1)) * 100, [completed, stepIndex]);
 
-  const stop = useCallback((updateState = true) => {
+  const releaseRun = useCallback((disposeCamera: boolean, updateState = true) => {
     runIdRef.current += 1;
     if (introTimerRef.current) {
       window.clearTimeout(introTimerRef.current.id);
@@ -159,13 +176,21 @@ export function CalibrationScreen({
     cancelLoopRef.current = null;
     providerReleaseRef.current?.release();
     providerReleaseRef.current = null;
-    cameraReleaseRef.current?.release();
-    cameraReleaseRef.current = null;
+    const cameraOwner = cameraOwnerRef.current;
+    cameraOwnerRef.current = null;
+    if (cameraOwner) releaseCamera(cameraOwner, disposeCamera);
     const video = videoRef.current;
     if (video && !video.paused) video.pause();
     readySinceRef.current = null;
     if (updateState && mountedRef.current) setRunning(false);
+    return disposeCamera ? null : cameraOwner?.session ?? null;
   }, []);
+
+  const stop = useCallback((updateState = true) => {
+    releaseRun(true, updateState);
+  }, [releaseRun]);
+
+  const transferCamera = useCallback(() => releaseRun(false), [releaseRun]);
 
   const syncVideoSize = useCallback(() => {
     const video = videoRef.current;
@@ -186,9 +211,9 @@ export function CalibrationScreen({
     setProfile(nextProfile);
     setInstruction("校准完成");
     setRunning(false);
-    onComplete?.(nextProfile);
-    stop();
-  }, [now, onComplete, stop]);
+    const camera = transferCamera();
+    if (camera) onComplete?.(nextProfile, camera);
+  }, [now, onComplete, transferCamera]);
 
   const start = useCallback(async () => {
     const video = videoRef.current;
@@ -217,21 +242,35 @@ export function CalibrationScreen({
     }, introDurationMs);
     introTimerRef.current = { runId, id: introTimerId };
 
-    let camera: CameraSession | null = null;
+    let cameraOwner: OwnedCamera | null = null;
     let provider: PoseProvider | null = null;
     try {
-      camera = await cameraStarter(video);
-      let cameraReleased = false;
-      const releaseCamera = () => {
-        if (cameraReleased) return;
-        cameraReleased = true;
-        camera?.stop();
-      };
+      if (cameraSession) {
+        cameraOwner = {
+          runId,
+          session: cameraSession,
+          video,
+          stopOnDispose: false,
+          released: false,
+        };
+        cameraOwnerRef.current = cameraOwner;
+        await cameraSession.attach(video);
+      } else {
+        const camera = await cameraStarter(video);
+        cameraOwner = {
+          runId,
+          session: camera,
+          video,
+          stopOnDispose: true,
+          released: false,
+        };
+      }
       if (!mountedRef.current || runIdRef.current !== runId) {
-        releaseCamera();
+        releaseCamera(cameraOwner, true);
+        if (cameraOwnerRef.current?.runId === runId) cameraOwnerRef.current = null;
         return;
       }
-      cameraReleaseRef.current = { runId, release: releaseCamera };
+      cameraOwnerRef.current = cameraOwner;
       provider = providerFactory();
       let providerReleased = false;
       const releaseProvider = () => {
@@ -243,9 +282,9 @@ export function CalibrationScreen({
       await provider.start();
       if (!mountedRef.current || runIdRef.current !== runId) {
         releaseProvider();
-        releaseCamera();
+        releaseCamera(cameraOwner, true);
         if (providerReleaseRef.current?.runId === runId) providerReleaseRef.current = null;
-        if (cameraReleaseRef.current?.runId === runId) cameraReleaseRef.current = null;
+        if (cameraOwnerRef.current?.runId === runId) cameraOwnerRef.current = null;
         return;
       }
       const cancelLoop = poseLoop({
@@ -287,7 +326,7 @@ export function CalibrationScreen({
       setIntroVisible(false);
       setInstruction(`摄像头启动失败：${error instanceof Error ? error.message : "请检查摄像头权限"}`);
     }
-  }, [cameraStarter, completeReadyStep, now, poseLoop, providerFactory, stepDurationMs, stop, syncVideoSize]);
+  }, [cameraSession, cameraStarter, completeReadyStep, now, poseLoop, providerFactory, stepDurationMs, stop, syncVideoSize]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -299,9 +338,8 @@ export function CalibrationScreen({
   }, [start, stop]);
 
   const handleSkip = useCallback(() => {
-    stop();
-    onSkip();
-  }, [onSkip, stop]);
+    onSkip(transferCamera());
+  }, [onSkip, transferCamera]);
 
   return (
     <main className="calibration-stage calibration-stage--fullscreen">

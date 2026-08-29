@@ -2,8 +2,20 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { PoseFrame } from "../domain/types";
+import type { SharedCameraSession } from "../pose/camera";
 import type { PoseProvider } from "../pose/types";
 import { CalibrationScreen } from "./CalibrationScreen";
+
+function createCameraSession(overrides: Partial<SharedCameraSession> = {}): SharedCameraSession {
+  return {
+    stream: {} as MediaStream,
+    attach: vi.fn(async () => undefined),
+    detach: vi.fn(),
+    stop: vi.fn(),
+    isLive: vi.fn(() => true),
+    ...overrides,
+  };
+}
 
 function fullBodyFrame(): PoseFrame {
   return {
@@ -42,41 +54,47 @@ function squatFrame(): PoseFrame {
 }
 
 describe("CalibrationScreen", () => {
-  it("skips calibration without manufacturing a profile", () => {
+  it("skips pending camera permission with null without manufacturing a profile", () => {
     const onSkip = vi.fn();
+    const onComplete = vi.fn();
     const cameraStarter = vi.fn(() => new Promise<never>(() => undefined));
-    render(<CalibrationScreen chartCount={3} onSkip={onSkip} cameraStarter={cameraStarter} />);
+    const view = render(<CalibrationScreen chartCount={3} onSkip={onSkip} onComplete={onComplete} cameraStarter={cameraStarter} />);
 
     fireEvent.click(screen.getByRole("button", { name: "跳过" }));
 
-    expect(onSkip).toHaveBeenCalledOnce();
+    expect(onSkip).toHaveBeenCalledWith(null);
+    expect(onComplete).not.toHaveBeenCalled();
+    view.unmount();
   });
 
-  it("releases a camera that resolves after calibration was skipped and does not start the provider", async () => {
-    let resolveCamera!: (session: { stream: MediaStream; stop: ReturnType<typeof vi.fn> }) => void;
-    const cameraStop = vi.fn();
-    const cameraStarter = vi.fn(() => new Promise<{ stream: MediaStream; stop: ReturnType<typeof vi.fn> }>((resolve) => {
+  it("stops a camera that resolves after calibration was skipped and does not start the provider", async () => {
+    let resolveCamera!: (session: SharedCameraSession) => void;
+    const session = createCameraSession();
+    const onSkip = vi.fn();
+    const cameraStarter = vi.fn(() => new Promise<SharedCameraSession>((resolve) => {
       resolveCamera = resolve;
     }));
     const provider: PoseProvider = { start: vi.fn(async () => undefined), detect: vi.fn(() => null), stop: vi.fn() };
     const view = render(
-      <CalibrationScreen chartCount={3} onSkip={vi.fn()} cameraStarter={cameraStarter} providerFactory={() => provider} />,
+      <CalibrationScreen chartCount={3} onSkip={onSkip} cameraStarter={cameraStarter} providerFactory={() => provider} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "跳过" }));
-    view.unmount();
+    expect(onSkip).toHaveBeenCalledWith(null);
     await act(async () => {
-      resolveCamera({ stream: {} as MediaStream, stop: cameraStop });
+      resolveCamera(session);
       await Promise.resolve();
     });
 
-    expect(cameraStop).toHaveBeenCalledOnce();
+    expect(session.stop).toHaveBeenCalledOnce();
     expect(provider.start).not.toHaveBeenCalled();
     expect(provider.stop).not.toHaveBeenCalled();
+    view.unmount();
   });
 
-  it("immediately releases camera and provider when skipped while provider startup is pending", async () => {
-    const cameraStop = vi.fn();
+  it("transfers an acquired camera and releases only the provider when skipped during provider startup", async () => {
+    const session = createCameraSession();
+    const onSkip = vi.fn();
     const provider: PoseProvider = {
       start: vi.fn(() => new Promise<never>(() => undefined)),
       detect: vi.fn(() => null),
@@ -85,8 +103,8 @@ describe("CalibrationScreen", () => {
     const view = render(
       <CalibrationScreen
         chartCount={3}
-        onSkip={vi.fn()}
-        cameraStarter={vi.fn(async () => ({ stream: {} as MediaStream, stop: cameraStop }))}
+        onSkip={onSkip}
+        cameraStarter={vi.fn(async () => session)}
         providerFactory={() => provider}
       />,
     );
@@ -98,8 +116,57 @@ describe("CalibrationScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "跳过" }));
     view.unmount();
 
-    expect(cameraStop).toHaveBeenCalledOnce();
+    expect(onSkip).toHaveBeenCalledWith(session);
+    expect(session.detach).toHaveBeenCalledOnce();
+    expect(session.stop).not.toHaveBeenCalled();
     expect(provider.stop).toHaveBeenCalledOnce();
+  });
+
+  it("reattaches an App-owned camera without requesting another camera session", async () => {
+    const session = createCameraSession();
+    const cameraStarter = vi.fn(async () => session);
+    const onSkip = vi.fn();
+    const providerFactory = vi.fn((): PoseProvider => ({
+      start: vi.fn(async () => undefined),
+      detect: vi.fn(() => null),
+      stop: vi.fn(),
+    }));
+    const firstView = render(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={onSkip}
+        cameraStarter={cameraStarter}
+        providerFactory={providerFactory}
+        poseLoop={vi.fn(() => vi.fn())}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    expect(onSkip).toHaveBeenCalledWith(session);
+
+    firstView.rerender(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={vi.fn()}
+        cameraSession={session}
+        cameraStarter={cameraStarter}
+        providerFactory={providerFactory}
+        poseLoop={vi.fn(() => vi.fn())}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(cameraStarter).toHaveBeenCalledOnce();
+    expect(session.attach).toHaveBeenCalledOnce();
+    firstView.unmount();
+    expect(session.stop).not.toHaveBeenCalled();
   });
 
   it("clears the intro timer on skip and never completes calibration afterward", async () => {
@@ -128,7 +195,7 @@ describe("CalibrationScreen", () => {
   });
 
   it("starts a fresh calibration session after the StrictMode effect cleanup", async () => {
-    const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
+    const cameraStarter = vi.fn(async () => createCameraSession());
     const providerFactory = vi.fn((): PoseProvider => ({
       start: vi.fn(async () => undefined),
       detect: vi.fn(() => null),
@@ -157,11 +224,11 @@ describe("CalibrationScreen", () => {
   });
 
   it("does not let a late camera from an obsolete run overwrite the current run resources", async () => {
-    type Session = { stream: MediaStream; stop: ReturnType<typeof vi.fn> };
-    const pending: Array<(session: Session) => void> = [];
-    const cameraStarter = vi.fn(() => new Promise<Session>((resolve) => pending.push(resolve)));
-    const firstCameraStop = vi.fn();
-    const secondCameraStop = vi.fn();
+    const pending: Array<(session: SharedCameraSession) => void> = [];
+    const cameraStarter = vi.fn(() => new Promise<SharedCameraSession>((resolve) => pending.push(resolve)));
+    const firstSession = createCameraSession();
+    const secondSession = createCameraSession();
+    const onSkip = vi.fn();
     const provider: PoseProvider = {
       start: vi.fn(async () => undefined),
       detect: vi.fn(() => null),
@@ -173,7 +240,7 @@ describe("CalibrationScreen", () => {
       <StrictMode>
         <CalibrationScreen
           chartCount={3}
-          onSkip={vi.fn()}
+          onSkip={onSkip}
           cameraStarter={cameraStarter}
           providerFactory={() => provider}
           poseLoop={poseLoop}
@@ -183,7 +250,7 @@ describe("CalibrationScreen", () => {
     expect(cameraStarter).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      pending[1]({ stream: {} as MediaStream, stop: secondCameraStop });
+      pending[1](secondSession);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -191,22 +258,24 @@ describe("CalibrationScreen", () => {
     expect(poseLoop).toHaveBeenCalledOnce();
 
     await act(async () => {
-      pending[0]({ stream: {} as MediaStream, stop: firstCameraStop });
+      pending[0](firstSession);
       await Promise.resolve();
     });
-    expect(firstCameraStop).toHaveBeenCalledOnce();
-    expect(secondCameraStop).not.toHaveBeenCalled();
+    expect(firstSession.stop).toHaveBeenCalledOnce();
+    expect(secondSession.stop).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "跳过" }));
     view.unmount();
 
-    expect(secondCameraStop).toHaveBeenCalledOnce();
+    expect(onSkip).toHaveBeenCalledWith(secondSession);
+    expect(secondSession.detach).toHaveBeenCalledOnce();
+    expect(secondSession.stop).not.toHaveBeenCalled();
     expect(provider.stop).toHaveBeenCalledOnce();
     expect(cancelLoop).toHaveBeenCalledOnce();
   });
 
   it("releases acquired resources when provider startup fails", async () => {
-    const cameraStop = vi.fn();
+    const session = createCameraSession();
     const provider: PoseProvider = {
       start: vi.fn(async () => { throw new Error("model failed"); }),
       detect: vi.fn(() => null),
@@ -216,7 +285,7 @@ describe("CalibrationScreen", () => {
       <CalibrationScreen
         chartCount={3}
         onSkip={vi.fn()}
-        cameraStarter={vi.fn(async () => ({ stream: {} as MediaStream, stop: cameraStop }))}
+        cameraStarter={vi.fn(async () => session)}
         providerFactory={() => provider}
       />,
     );
@@ -225,7 +294,7 @@ describe("CalibrationScreen", () => {
       await Promise.resolve();
     });
 
-    expect(cameraStop).toHaveBeenCalledOnce();
+    expect(session.stop).toHaveBeenCalledOnce();
     expect(provider.stop).toHaveBeenCalledOnce();
   });
 
@@ -233,7 +302,8 @@ describe("CalibrationScreen", () => {
     vi.useFakeTimers();
     let currentTime = 0;
     const onComplete = vi.fn();
-    const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
+    const session = createCameraSession();
+    const cameraStarter = vi.fn(async () => session);
     const provider: PoseProvider = { start: vi.fn(async () => undefined), detect: vi.fn(() => null), stop: vi.fn() };
     let emitFrame: ((frame: PoseFrame) => void) | undefined;
 
@@ -319,20 +389,25 @@ describe("CalibrationScreen", () => {
       emitFrame?.(squatFrame());
       await Promise.resolve();
     });
-    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
-      armLength: expect.any(Number),
-      armLengthRatio: expect.any(Number),
-      legLengthRatio: expect.any(Number),
-      lowestSquatHipY: expect.any(Number),
-      squatDepthRatio: expect.any(Number),
-    }));
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        armLength: expect.any(Number),
+        armLengthRatio: expect.any(Number),
+        legLengthRatio: expect.any(Number),
+        lowestSquatHipY: expect.any(Number),
+        squatDepthRatio: expect.any(Number),
+      }),
+      session,
+    );
+    expect(session.detach).toHaveBeenCalledOnce();
+    expect(session.stop).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
   it("shows live missing-part guidance and accepts low-confidence full-body frames", async () => {
     vi.useFakeTimers();
     let currentTime = 0;
-    const cameraStarter = vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() }));
+    const cameraStarter = vi.fn(async () => createCameraSession());
     const provider: PoseProvider = { start: vi.fn(async () => undefined), detect: vi.fn(() => null), stop: vi.fn() };
     let emitFrame: ((frame: PoseFrame) => void) | undefined;
 

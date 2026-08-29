@@ -1,16 +1,24 @@
 ﻿import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
-import type { BeatPoint } from "../domain/types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BeatPoint, CalibrationProfile } from "../domain/types";
 import { BUILT_IN_LEVEL } from "../levels/builtInLevel";
 import { DEFAULT_BUILT_IN_CHART } from "../levels/defaultChart";
+import type { SharedCameraSession } from "../pose/camera";
 
 const homeTitle = "FullyDancy";
 const startLabel = "\u5f00\u59cb\u6e38\u620f";
 const selectLabel = "\u9009\u62e9 8\u67083\u65e5\u821e\u8e48\u6311\u6218";
 const analysisLabel = "\u5206\u6790\u5361\u70b9";
 const nextStepLabel = "进入下一步";
-const challengeMockState = vi.hoisted(() => ({ renderReal: false }));
+const calibrationMockState = vi.hoisted(() => ({
+  outgoingSession: null as SharedCameraSession | null,
+  receivedSession: undefined as SharedCameraSession | null | undefined,
+}));
+const challengeMockState = vi.hoisted(() => ({
+  renderReal: false,
+  receivedSession: undefined as SharedCameraSession | null | undefined,
+}));
 
 const chart: BeatPoint[] = [
   { id: "beat-1", beatIndex: 1, timeSec: 1, salience: 1, enabled: true, action: "rhythm" },
@@ -43,32 +51,59 @@ vi.mock("../analysis/demoPoseCache", async (importOriginal) => {
 });
 
 vi.mock("../pose/camera", () => ({
-  startCamera: vi.fn(async () => ({ stream: {} as MediaStream, stop: vi.fn() })),
+  startCamera: vi.fn(async () => ({
+    stream: {} as MediaStream,
+    attach: vi.fn(async () => undefined),
+    detach: vi.fn(),
+    stop: vi.fn(),
+    isLive: vi.fn(() => true),
+  })),
 }));
 
 vi.mock("../components/CalibrationScreen", () => ({
-  CalibrationScreen: ({ chartCount, onComplete, onSkip }: { chartCount: number; onComplete?: () => void; onSkip: () => void }) => (
-    <main>
-      <h1>身体校准</h1>
-      <p>已确认 {chartCount} 个卡点，准备进行自动校准。</p>
-      <button type="button" onClick={() => onComplete?.()}>完成校准</button>
-      <button type="button" onClick={onSkip}>跳过</button>
-    </main>
-  ),
+  CalibrationScreen: ({
+    chartCount,
+    cameraSession,
+    onComplete,
+    onSkip,
+  }: {
+    chartCount: number;
+    cameraSession?: SharedCameraSession | null;
+    onComplete?: (profile: CalibrationProfile, camera: SharedCameraSession) => void;
+    onSkip: (camera: SharedCameraSession | null) => void;
+  }) => {
+    calibrationMockState.receivedSession = cameraSession;
+    const getTransferredSession = () => calibrationMockState.outgoingSession ?? cameraSession ?? null;
+    return (
+      <main>
+        <h1>身体校准</h1>
+        <p>已确认 {chartCount} 个卡点，准备进行自动校准。</p>
+        <button type="button" onClick={() => {
+          const transferredSession = getTransferredSession();
+          if (transferredSession) onComplete?.({} as CalibrationProfile, transferredSession);
+        }}>完成校准</button>
+        <button type="button" onClick={() => onSkip(getTransferredSession())}>跳过</button>
+      </main>
+    );
+  },
 }));
 
 vi.mock("../components/ChallengeScreen", async (importOriginal) => {
   const original = await importOriginal<typeof import("../components/ChallengeScreen")>();
   return {
-    ChallengeScreen: (props: ComponentProps<typeof original.ChallengeScreen>) => challengeMockState.renderReal ? (
-      <original.ChallengeScreen {...props} />
-    ) : (
-      <main>
-        <h1>挑战测试页</h1>
-        <span>缓存 {props.initialPoseCache.length} 帧</span>
-        <span>卡点 {props.chart.length} 个</span>
-      </main>
-    ),
+    ChallengeScreen: (props: ComponentProps<typeof original.ChallengeScreen> & { cameraSession?: SharedCameraSession | null }) => {
+      challengeMockState.receivedSession = props.cameraSession;
+      return challengeMockState.renderReal ? (
+        <original.ChallengeScreen {...props} />
+      ) : (
+        <main>
+          <h1>挑战测试页</h1>
+          <span>缓存 {props.initialPoseCache.length} 帧</span>
+          <span>卡点 {props.chart.length} 个</span>
+          <button type="button" onClick={props.onBack}>返回校准</button>
+        </main>
+      );
+    },
   };
 });
 
@@ -76,7 +111,24 @@ import { App } from "./App";
 import { extractDemoPoseCache } from "../analysis/demoPoseCache";
 import { startCamera } from "../pose/camera";
 
+function createCameraSession(): SharedCameraSession {
+  return {
+    stream: {} as MediaStream,
+    attach: vi.fn(async () => undefined),
+    detach: vi.fn(),
+    stop: vi.fn(),
+    isLive: vi.fn(() => true),
+  };
+}
+
 describe("App", () => {
+  beforeEach(() => {
+    calibrationMockState.outgoingSession = null;
+    calibrationMockState.receivedSession = undefined;
+    challengeMockState.renderReal = false;
+    challengeMockState.receivedSession = undefined;
+  });
+
   it("moves from the game introduction to level selection", () => {
     render(<App />);
 
@@ -111,8 +163,10 @@ describe("App", () => {
   it("enters the lightweight challenge shell after calibration completes", async () => {
     const poseExtractor = vi.mocked(extractDemoPoseCache);
     const cameraStarter = vi.mocked(startCamera);
+    const session = createCameraSession();
     poseExtractor.mockClear();
     cameraStarter.mockClear();
+    calibrationMockState.outgoingSession = session;
     challengeMockState.renderReal = true;
 
     try {
@@ -133,9 +187,37 @@ describe("App", () => {
       });
       expect(poseExtractor).not.toHaveBeenCalled();
       expect(cameraStarter).not.toHaveBeenCalled();
+      expect(challengeMockState.receivedSession).toBe(session);
     } finally {
       challengeMockState.renderReal = false;
     }
+  });
+
+  it("retains a transferred camera on back, stops it on replacement, and stops the replacement on unmount", () => {
+    const firstSession = createCameraSession();
+    const secondSession = createCameraSession();
+    calibrationMockState.outgoingSession = firstSession;
+    const view = render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+
+    expect(challengeMockState.receivedSession).toBe(firstSession);
+    expect(firstSession.stop).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "返回校准" }));
+    expect(calibrationMockState.receivedSession).toBe(firstSession);
+
+    calibrationMockState.outgoingSession = secondSession;
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    expect(firstSession.stop).toHaveBeenCalledOnce();
+    expect(challengeMockState.receivedSession).toBe(secondSession);
+    expect(secondSession.stop).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(secondSession.stop).toHaveBeenCalledOnce();
   });
 
   it("uses deterministic fallbacks when every setup screen is skipped", () => {
