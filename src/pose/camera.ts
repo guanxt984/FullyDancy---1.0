@@ -22,12 +22,20 @@ export async function startCamera(
   const videoConstraints = options.videoConstraints ?? { facingMode: "user" };
   const stream = await mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
   const attachedVideos = new Set<HTMLVideoElement>();
+  const attachmentGenerations = new Map<HTMLVideoElement, number>();
+  let nextAttachmentGeneration = 0;
   let stopped = false;
 
   const detach = (attachedVideo: HTMLVideoElement) => {
+    if (attachedVideo.srcObject !== stream) {
+      attachedVideos.delete(attachedVideo);
+      attachmentGenerations.delete(attachedVideo);
+      return;
+    }
     if (!attachedVideos.delete(attachedVideo)) return;
+    attachmentGenerations.delete(attachedVideo);
     attachedVideo.pause();
-    if (attachedVideo.srcObject === stream) attachedVideo.srcObject = null;
+    attachedVideo.srcObject = null;
   };
 
   const session: SharedCameraSession = {
@@ -39,10 +47,17 @@ export async function startCamera(
       attachedVideo.playsInline = true;
       attachedVideo.srcObject = stream;
       attachedVideos.add(attachedVideo);
+      const attachmentGeneration = ++nextAttachmentGeneration;
+      attachmentGenerations.set(attachedVideo, attachmentGeneration);
       try {
         await attachedVideo.play();
       } catch (error) {
-        detach(attachedVideo);
+        if (
+          attachmentGenerations.get(attachedVideo) === attachmentGeneration
+          && attachedVideo.srcObject === stream
+        ) {
+          detach(attachedVideo);
+        }
         throw error;
       }
     },

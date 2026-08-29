@@ -156,4 +156,54 @@ describe("startCamera", () => {
     expect(challengeVideo.pause).toHaveBeenCalledOnce();
     expect(session.isLive()).toBe(true);
   });
+
+  it("keeps a newer attachment when an earlier play attempt rejects late", async () => {
+    const track = { readyState: "live", stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = {
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+    } as unknown as MediaStream;
+    let resolveSecondPlay!: () => void;
+    let rejectFirstPlay!: (error: Error) => void;
+    const firstPlay = new Promise<void>((_, reject) => { rejectFirstPlay = reject; });
+    const secondPlay = new Promise<void>((resolve) => { resolveSecondPlay = resolve; });
+    const video = fakeVideo({ pause: vi.fn() });
+    const session = await startCamera(video, {
+      mediaDevices: { getUserMedia: async () => stream },
+    });
+    video.play = vi.fn()
+      .mockReturnValueOnce(firstPlay)
+      .mockReturnValueOnce(secondPlay);
+
+    const firstAttachment = session.attach(video);
+    const secondAttachment = session.attach(video);
+    resolveSecondPlay();
+    await secondAttachment;
+    rejectFirstPlay(new Error("late autoplay rejection"));
+    await expect(firstAttachment).rejects.toThrow("late autoplay rejection");
+
+    expect(video.srcObject).toBe(stream);
+    session.detach(video);
+    expect(video.srcObject).toBeNull();
+    expect(video.pause).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a video alone when another session has replaced its stream", async () => {
+    const track = { readyState: "live", stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = {
+      getTracks: () => [track],
+      getVideoTracks: () => [track],
+    } as unknown as MediaStream;
+    const replacementStream = {} as MediaStream;
+    const video = fakeVideo({ pause: vi.fn() });
+    const session = await startCamera(video, {
+      mediaDevices: { getUserMedia: async () => stream },
+    });
+    video.srcObject = replacementStream;
+
+    session.detach(video);
+
+    expect(video.pause).not.toHaveBeenCalled();
+    expect(video.srcObject).toBe(replacementStream);
+  });
 });
