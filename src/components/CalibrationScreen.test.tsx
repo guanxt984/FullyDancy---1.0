@@ -298,6 +298,51 @@ describe("CalibrationScreen", () => {
     expect(provider.stop).toHaveBeenCalledOnce();
   });
 
+  it("disposes the camera when calibration completes without an onComplete receiver", async () => {
+    vi.useFakeTimers();
+    const session = createCameraSession();
+    const provider: PoseProvider = {
+      start: vi.fn(async () => undefined),
+      detect: vi.fn(() => null),
+      stop: vi.fn(),
+    };
+    const cancelLoop = vi.fn();
+    let emitFrame: ((frame: PoseFrame) => void) | undefined;
+    const view = render(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={vi.fn()}
+        cameraStarter={vi.fn(async () => session)}
+        providerFactory={() => provider}
+        poseLoop={({ onFrame }) => {
+          emitFrame = onFrame;
+          return cancelLoop;
+        }}
+        now={() => 0}
+        stepDurationMs={0}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      vi.advanceTimersByTime(2000);
+    });
+
+    await act(async () => {
+      emitFrame?.(fullBodyFrame());
+      emitFrame?.(fullBodyFrame());
+      emitFrame?.(squatFrame());
+      await Promise.resolve();
+    });
+
+    expect(session.stop).toHaveBeenCalledOnce();
+    expect(provider.stop).toHaveBeenCalledOnce();
+    expect(cancelLoop).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(session.stop).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
   it("shows one large instruction line, then advances with a continuous hold countdown", async () => {
     vi.useFakeTimers();
     let currentTime = 0;

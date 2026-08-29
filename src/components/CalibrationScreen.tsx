@@ -211,9 +211,13 @@ export function CalibrationScreen({
     setProfile(nextProfile);
     setInstruction("校准完成");
     setRunning(false);
+    if (!onComplete) {
+      stop();
+      return;
+    }
     const camera = transferCamera();
-    if (camera) onComplete?.(nextProfile, camera);
-  }, [now, onComplete, transferCamera]);
+    if (camera) onComplete(nextProfile, camera);
+  }, [now, onComplete, stop, transferCamera]);
 
   const start = useCallback(async () => {
     const video = videoRef.current;
