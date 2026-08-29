@@ -402,4 +402,3 @@ Enter challenge before calibration has a live session. Confirm it shows `返回�
 - [ ] **Step 5: Commit any browser-found fix after RED/GREEN tests**
 
 If no fix is required, do not create an empty commit.
-
