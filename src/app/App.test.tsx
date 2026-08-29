@@ -91,14 +91,14 @@ vi.mock("../components/CalibrationScreen", () => ({
 vi.mock("../components/ChallengeScreen", async (importOriginal) => {
   const original = await importOriginal<typeof import("../components/ChallengeScreen")>();
   return {
-    ChallengeScreen: (props: ComponentProps<typeof original.ChallengeScreen> & { cameraSession?: SharedCameraSession | null }) => {
+    ChallengeScreen: (props: ComponentProps<typeof original.ChallengeScreen>) => {
       challengeMockState.receivedSession = props.cameraSession;
       return challengeMockState.renderReal ? (
         <original.ChallengeScreen {...props} />
       ) : (
         <main>
           <h1>挑战测试页</h1>
-          <span>缓存 {props.initialPoseCache.length} 帧</span>
+          <span>缓存 {props.level.poseCache.length} 帧</span>
           <span>卡点 {props.chart.length} 个</span>
           <button type="button" onClick={props.onBack}>返回校准</button>
         </main>

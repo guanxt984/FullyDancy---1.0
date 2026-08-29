@@ -468,33 +468,6 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
   fill: var(--accent);
 }
 
-.challenge-empty-state {
-  position: relative;
-  z-index: 1;
-  color: var(--stage-muted);
-  font-size: 13px;
-}
-
-.challenge-pose-retry {
-  position: relative;
-  z-index: 2;
-  min-height: 44px;
-  padding: 0 18px;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  color: var(--accent);
-  background: oklch(0.12 0.02 118 / 0.9);
-  font: inherit;
-  font-weight: 760;
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.challenge-pose-retry:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 3px;
-}
-
 .challenge-user-camera-card {
   display: grid;
   place-items: center;
@@ -618,12 +591,6 @@ h1 { max-width: 12ch; margin: 0; color: var(--stage-text); font-size: clamp(48px
   height: 100dvh;
   max-width: none;
   max-height: none;
-}
-
-.challenge-reference-overlay--full-height .challenge-empty-state {
-  color: var(--accent);
-  font-weight: 760;
-  text-shadow: 0 1px 8px oklch(0.04 0 0 / 0.78);
 }
 
 .challenge-transport {
