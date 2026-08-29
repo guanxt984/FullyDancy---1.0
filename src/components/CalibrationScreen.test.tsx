@@ -169,6 +169,39 @@ describe("CalibrationScreen", () => {
     expect(session.stop).not.toHaveBeenCalled();
   });
 
+  it("reacquires the camera when the App-owned session has ended", async () => {
+    const endedSession = createCameraSession({ isLive: vi.fn(() => false) });
+    const replacementSession = createCameraSession();
+    const cameraStarter = vi.fn(async () => replacementSession);
+    const onSkip = vi.fn();
+
+    render(
+      <CalibrationScreen
+        chartCount={3}
+        onSkip={onSkip}
+        cameraSession={endedSession}
+        cameraStarter={cameraStarter}
+        providerFactory={() => ({
+          start: vi.fn(async () => undefined),
+          detect: vi.fn(() => null),
+          stop: vi.fn(),
+        })}
+        poseLoop={vi.fn(() => vi.fn())}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(endedSession.attach).not.toHaveBeenCalled();
+    expect(cameraStarter).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    expect(onSkip).toHaveBeenCalledWith(replacementSession);
+    expect(replacementSession.stop).not.toHaveBeenCalled();
+  });
+
   it("clears the intro timer on skip and never completes calibration afterward", async () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();

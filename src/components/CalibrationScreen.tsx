@@ -249,7 +249,7 @@ export function CalibrationScreen({
     let cameraOwner: OwnedCamera | null = null;
     let provider: PoseProvider | null = null;
     try {
-      if (cameraSession) {
+      if (cameraSession?.isLive()) {
         cameraOwner = {
           runId,
           session: cameraSession,
