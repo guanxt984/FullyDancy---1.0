@@ -38,65 +38,17 @@ vi.mock("../analysis/demoPoseCache", () => ({
 import { extractDemoPoseCache } from "../analysis/demoPoseCache";
 import { AnalysisScreen } from "./AnalysisScreen";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
 describe("AnalysisScreen", () => {
-  it("keeps confirmation disabled while the demo pose cache is still extracting", async () => {
-    const pending = deferred<DemoPoseCache>();
-    vi.mocked(extractDemoPoseCache).mockReturnValueOnce(pending.promise);
+  it("uses the built-in pose asset without extracting the video", async () => {
+    vi.mocked(extractDemoPoseCache).mockClear();
     const onConfirm = vi.fn();
     render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={onConfirm} onBack={vi.fn()} onSkip={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "分析卡点" }));
     await screen.findByRole("group", { name: "卡点时间轴" });
-    const confirm = screen.getByRole("button", { name: "进入下一步" });
-
-    expect(confirm).toBeDisabled();
-    fireEvent.click(confirm);
-    expect(onConfirm).not.toHaveBeenCalled();
-
-    pending.resolve(openArmCache);
-    await waitFor(() => expect(confirm).toBeEnabled());
-  });
-
-  it("confirms with the resolved demo pose cache", async () => {
-    const pending = deferred<DemoPoseCache>();
-    vi.mocked(extractDemoPoseCache).mockReturnValueOnce(pending.promise);
-    const onConfirm = vi.fn();
-    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={onConfirm} onBack={vi.fn()} onSkip={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "分析卡点" }));
-    await screen.findByRole("group", { name: "卡点时间轴" });
-    pending.resolve(openArmCache);
-    const confirm = screen.getByRole("button", { name: "进入下一步" });
-    await waitFor(() => expect(confirm).toBeEnabled());
-    fireEvent.click(confirm);
-
-    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ poseCache: openArmCache }));
-  });
-
-  it.each([
-    ["fails", () => Promise.reject(new Error("pose failed"))],
-    ["returns no frames", () => Promise.resolve([] as DemoPoseCache)],
-  ])("offers a visible retry when pose extraction %s", async (_case, extraction) => {
-    vi.mocked(extractDemoPoseCache).mockImplementationOnce(extraction);
-    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "分析卡点" }));
-    await screen.findByRole("group", { name: "卡点时间轴" });
-
-    const retry = await screen.findByRole("button", { name: "重试骨架提取" });
-    expect(screen.getByRole("button", { name: "进入下一步" })).toBeDisabled();
-    fireEvent.click(retry);
-    await waitFor(() => expect(screen.getByRole("button", { name: "进入下一步" })).toBeEnabled());
+    expect(extractDemoPoseCache).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "进入下一步" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ poseCache: BUILT_IN_LEVEL.poseCache }));
   });
 
   it("skips with the current analysis result", async () => {
@@ -107,7 +59,7 @@ describe("AnalysisScreen", () => {
     await screen.findByRole("group", { name: "卡点时间轴" });
     fireEvent.click(screen.getByRole("button", { name: "跳过" }));
 
-    expect(onSkip).toHaveBeenCalledWith(expect.objectContaining({ chart: expect.any(Array), poseCache: expect.any(Array) }));
+    expect(onSkip).toHaveBeenCalledWith(expect.objectContaining({ chart: expect.any(Array), poseCache: BUILT_IN_LEVEL.poseCache }));
   });
 
   it("uses one product timeline to seek video and beat setup", async () => {
@@ -214,7 +166,7 @@ describe("AnalysisScreen", () => {
   });
 
   it("uses the full-video pose cache to suggest beat actions and highlight the demo skeleton", async () => {
-    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />);
+    render(<AnalysisScreen level={{ ...BUILT_IN_LEVEL, poseCache: openArmCache }} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />);
 
     const video = screen.getByLabelText("\u5f85\u5206\u6790\u821e\u8e48\u89c6\u9891") as HTMLVideoElement;
     fireEvent.click(screen.getByRole("button", { name: "\u5206\u6790\u5361\u70b9" }));
@@ -229,12 +181,12 @@ describe("AnalysisScreen", () => {
   });
 
   it("shows cached demo skeleton for the current playback time", async () => {
-    render(<AnalysisScreen level={BUILT_IN_LEVEL} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />);
+    render(<AnalysisScreen level={{ ...BUILT_IN_LEVEL, poseCache: openArmCache }} onConfirm={vi.fn()} onBack={vi.fn()} onSkip={vi.fn()} />);
 
     const video = screen.getByLabelText("\u5f85\u5206\u6790\u821e\u8e48\u89c6\u9891") as HTMLVideoElement;
     fireEvent.click(screen.getByRole("button", { name: "\u5206\u6790\u5361\u70b9" }));
 
-    await screen.findByText("\u5df2\u63d0\u53d6 1 \u5e27\u793a\u8303\u9aa8\u67b6");
+    await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
     video.currentTime = 1;
     fireEvent.timeUpdate(video);
 

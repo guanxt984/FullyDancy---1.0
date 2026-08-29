@@ -1,7 +1,8 @@
-﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { BeatPoint } from "../domain/types";
+import { BUILT_IN_LEVEL } from "../levels/builtInLevel";
 import { DEFAULT_BUILT_IN_CHART } from "../levels/defaultChart";
 
 const homeTitle = "FullyDancy";
@@ -121,18 +122,16 @@ describe("App", () => {
       fireEvent.click(screen.getByRole("button", { name: selectLabel }));
       fireEvent.click(screen.getByRole("button", { name: analysisLabel }));
       await screen.findByRole("group", { name: "\u5361\u70b9\u65f6\u95f4\u8f74" });
-      await screen.findByText("已提取 1 帧示范骨架");
       fireEvent.click(screen.getByRole("button", { name: nextStepLabel }));
       fireEvent.click(screen.getByRole("button", { name: "\u5b8c\u6210\u6821\u51c6" }));
 
       expect(screen.getByRole("dialog", { name: "舞蹈玩法" })).toBeVisible();
-      await waitFor(() => expect(poseExtractor).toHaveBeenCalledTimes(1));
       await act(async () => {
         await Promise.resolve();
         await Promise.resolve();
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(poseExtractor).toHaveBeenCalledOnce();
+      expect(poseExtractor).not.toHaveBeenCalled();
       expect(cameraStarter).not.toHaveBeenCalled();
     } finally {
       challengeMockState.renderReal = false;
@@ -149,7 +148,7 @@ describe("App", () => {
 
     expect(screen.getByRole("heading", { name: "挑战测试页" })).toBeInTheDocument();
     expect(screen.getByText(`卡点 ${DEFAULT_BUILT_IN_CHART.length} 个`)).toBeInTheDocument();
-    expect(screen.getByText("缓存 0 帧")).toBeInTheDocument();
+    expect(screen.getByText(`缓存 ${BUILT_IN_LEVEL.poseCache.length} 帧`)).toBeInTheDocument();
   });
 
   it("keeps the camera technical slice out of the formal home flow", () => {

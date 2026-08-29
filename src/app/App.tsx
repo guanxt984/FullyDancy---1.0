@@ -23,7 +23,7 @@ export function App() {
 
   function skipAnalysis(result: AnalysisResult | null) {
     setChart(result?.chart.length ? result.chart : DEFAULT_BUILT_IN_CHART);
-    setDemoPoseCache(result?.poseCache ?? []);
+    setDemoPoseCache(result?.poseCache.length ? result.poseCache : BUILT_IN_LEVEL.poseCache);
     setScreen("calibration");
   }
 
