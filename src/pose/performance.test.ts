@@ -28,15 +28,15 @@ describe("MediaPipePoseProvider performance safeguards", () => {
     expect(delegates).toEqual(["GPU", "CPU"]);
   });
 
-  it("switches from Full to Lite after 120 slow inferences", async () => {
+  it("switches from Heavy to Full after 120 slow inferences", async () => {
     let now = 0;
     const runtime: MediaPipeRuntime = {
       async createLandmarker({ modelAssetPath }) {
-        const isLite = modelAssetPath.includes("lite");
+        const isFull = modelAssetPath.includes("full");
         return {
           detectForVideo: () => {
             now += 46;
-            return { landmarks: [[{ x: isLite ? 2 : 1, y: 0, z: 0, visibility: 1 }]] };
+            return { landmarks: [[{ x: isFull ? 2 : 1, y: 0, z: 0, visibility: 1 }]], worldLandmarks: [[]] };
           },
           close() {},
         };
@@ -47,18 +47,18 @@ describe("MediaPipePoseProvider performance safeguards", () => {
     for (let index = 0; index < 120; index += 1) provider.detect(video, index);
     await flushAsyncWork();
 
-    expect(provider.getModelTier()).toBe("lite");
+    expect(provider.getModelTier()).toBe("full");
     expect(provider.detect(video, 121)?.landmarks[0]?.x).toBe(2);
   });
 
-  it("starts Lite performance statistics with only Lite inference samples", async () => {
+  it("switches from Full to Lite only after Full is also slow", async () => {
     let now = 0;
     const runtime: MediaPipeRuntime = { async createLandmarker({ modelAssetPath }) {
       const duration = modelAssetPath.includes("lite") ? 5 : 46;
       return {
         detectForVideo: () => {
           now += duration;
-          return { landmarks: [[]] };
+          return { landmarks: [[{ x: modelAssetPath.includes("lite") ? 3 : modelAssetPath.includes("full") ? 2 : 1, y: 0, z: 0, visibility: 1 }]], worldLandmarks: [[]] };
         },
         close() {},
       };
@@ -67,21 +67,24 @@ describe("MediaPipePoseProvider performance safeguards", () => {
     await provider.start();
     for (let index = 0; index < 120; index += 1) provider.detect(video, index);
     await flushAsyncWork();
+    expect(provider.getModelTier()).toBe("full");
+    for (let index = 120; index < 240; index += 1) provider.detect(video, index);
+    await flushAsyncWork();
 
     expect(provider.getModelTier()).toBe("lite");
-    provider.detect(video, 121);
+    provider.detect(video, 241);
     expect(provider.getPerformanceStats()).toEqual({ sampleCount: 1, meanMs: 5, p95Ms: 5 });
   });
 
-  it("keeps Full and does not retry Lite after GPU and CPU initialization fail", async () => {
+  it("keeps the active model and does not retry downgrade after GPU and CPU initialization fail", async () => {
     let now = 0;
-    let liteAttempts = 0;
+    let fullAttempts = 0;
     const runtime: MediaPipeRuntime = { async createLandmarker({ modelAssetPath }) {
-      if (modelAssetPath.includes("lite")) {
-        liteAttempts += 1;
-        throw new Error("Lite unavailable");
+      if (modelAssetPath.includes("full")) {
+        fullAttempts += 1;
+        throw new Error("Full unavailable");
       }
-      return { detectForVideo: () => { now += 46; return { landmarks: [[]] }; }, close() {} };
+      return { detectForVideo: () => { now += 46; return { landmarks: [[]], worldLandmarks: [[]] }; }, close() {} };
     } };
     const provider = new MediaPipePoseProvider({ runtime, now: () => now });
     await provider.start();
@@ -90,9 +93,9 @@ describe("MediaPipePoseProvider performance safeguards", () => {
     for (let index = 0; index < 240; index += 1) provider.detect(video, index);
     await flushAsyncWork();
 
-    expect(provider.getModelTier()).toBe("full");
-    expect(provider.getDowngradeError()).toBe("Lite unavailable");
-    expect(liteAttempts).toBe(2);
+    expect(provider.getModelTier()).toBe("heavy");
+    expect(provider.getDowngradeError()).toBe("Full unavailable");
+    expect(fullAttempts).toBe(2);
   });
 
   it("reports a hand-checkable rolling mean and P95 for recent inference durations", async () => {
@@ -103,7 +106,7 @@ describe("MediaPipePoseProvider performance safeguards", () => {
         detectForVideo: () => {
           now += nextDuration;
           nextDuration += 1;
-          return { landmarks: [[]] };
+          return { landmarks: [[]], worldLandmarks: [[]] };
         },
         close() {},
       };

@@ -16,6 +16,7 @@ export interface PoseLandmark {
 export interface PoseFrame {
   captureTimeSec: number;
   landmarks: PoseLandmark[];
+  worldLandmarks?: PoseLandmark[];
 }
 
 export interface CameraSignature {
@@ -26,11 +27,17 @@ export interface CameraSignature {
 }
 
 export interface CalibrationProfile {
-  bodyScale: number;
-  straightArmAngle: Record<Side, number>;
-  standingHipHeight: number;
-  squatDepth: number | null;
-  cameraSignature: CameraSignature;
+  shoulderWidth: number;
+  hipWidth: number;
+  bodyHeight: number;
+  armSpan: number;
+  armLength: number;
+  armLengthRatio: number;
+  legLengthRatio: number;
+  lowestSquatHipY: number;
+  squatDepthRatio: number;
+  cameraScale: number;
+  capturedAt: number;
 }
 
 export interface BeatPoint {
@@ -40,6 +47,7 @@ export interface BeatPoint {
   salience: number;
   enabled: boolean;
   action: ActionRequirement;
+  actions?: ActionRequirement[];
 }
 
 export interface BeatJudgement {

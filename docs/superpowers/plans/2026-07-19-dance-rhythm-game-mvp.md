@@ -1,5 +1,7 @@
 # fullydancy MVP 分阶段实施计划
 
+> 2026-08-17 更新说明：本文件保留为早期实施计划记录，其中“用户上传本地视频”等内容已被后续内置单关卡 MVP 决策覆盖。当前产品定义、功能范围和技术实现以 `docs/superpowers/specs/2026-07-19-dance-rhythm-game-mvp-design.md`、`2026-08-03-built-in-dance-level-design.md` 和 `2026-08-03-complete-interactive-prototype-design.md` 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** 构建可公开部署的轻量 Web 舞蹈练习 MVP：上传本地视频、确认强拍谱面、自动采集身体与机位数据，并通过本地姿态识别反馈节奏落点和“打开/蹲低”。

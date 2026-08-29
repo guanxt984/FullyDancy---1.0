@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 
 const MODELS = [
   {
+    fileName: "pose_landmarker_heavy-v1.task",
+    url: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+  },
+  {
     fileName: "pose_landmarker_full-v1.task",
     url: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
   },

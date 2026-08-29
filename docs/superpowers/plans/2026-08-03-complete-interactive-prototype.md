@@ -1,5 +1,7 @@
 # FullyDancy Complete Interactive Prototype Implementation Plan
 
+> 2026-08-17 更新说明：本文件保留为实施计划记录。当前原型已进一步调整为：Canvas 荧光粒子首页、内置单关卡、单时间轴卡点分析、示范视频骨架缓存、身体校准和极简挑战页壳子。最新产品设计以 `docs/superpowers/specs/2026-08-03-complete-interactive-prototype-design.md` 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a polished, clickable FullyDancy prototype that moves from the game introduction through built-in level selection, local beat setup, automatic body calibration, and a playable dance challenge.

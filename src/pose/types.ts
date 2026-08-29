@@ -6,4 +6,4 @@ export interface PoseProvider {
   stop(): void;
 }
 
-export type PoseModelTier = "full" | "lite";
+export type PoseModelTier = "heavy" | "full" | "lite";
