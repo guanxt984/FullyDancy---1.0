@@ -6,6 +6,24 @@ import { createServer } from "vite";
 const DURATION_SEC = 13;
 const OUTPUT_PATH = join(process.cwd(), "src", "levels", "assets", "level-1.pose.json");
 
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validateLandmarks(value, label) {
+  if (!Array.isArray(value) || value.length !== 33) {
+    throw new Error(`Generated pose frame must contain 33 ${label} landmarks`);
+  }
+  for (const landmark of value) {
+    if (typeof landmark !== "object" || landmark === null) {
+      throw new Error(`Invalid generated ${label} landmark`);
+    }
+    if (!isFiniteNumber(landmark.x) || !isFiniteNumber(landmark.y) || !isFiniteNumber(landmark.z) || !isFiniteNumber(landmark.visibility)) {
+      throw new Error(`Generated ${label} landmark must contain finite x, y, z, and visibility values`);
+    }
+  }
+}
+
 function validateGeneratedPoseCache(value) {
   if (!Array.isArray(value) || value.length < 100) {
     throw new Error(`Generated pose cache must contain at least 100 frames; received ${value?.length ?? 0}`);
@@ -13,12 +31,17 @@ function validateGeneratedPoseCache(value) {
 
   let previous = -1;
   for (const frame of value) {
-    if (typeof frame?.captureTimeSec !== "number" || frame.captureTimeSec < previous) {
+    if (typeof frame !== "object" || frame === null) {
+      throw new Error("Invalid generated pose frame");
+    }
+    if (!isFiniteNumber(frame.captureTimeSec) || frame.captureTimeSec < 0) {
+      throw new Error("Generated pose frame captureTimeSec must be a finite non-negative number");
+    }
+    if (frame.captureTimeSec < previous) {
       throw new Error("Generated pose frames must be ordered");
     }
-    if (!Array.isArray(frame.landmarks) || frame.landmarks.length !== 33) {
-      throw new Error("Generated pose frame must contain 33 landmarks");
-    }
+    validateLandmarks(frame.landmarks, "pose");
+    if (frame.worldLandmarks !== undefined) validateLandmarks(frame.worldLandmarks, "world");
     previous = frame.captureTimeSec;
   }
 

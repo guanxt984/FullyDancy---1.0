@@ -6,7 +6,7 @@ export interface BuiltInLevel {
   title: string;
   videoUrl: string;
   durationSec: number;
-  poseCache?: DemoPoseCache;
+  poseCache: DemoPoseCache;
 }
 
 export const BUILT_IN_LEVEL = {

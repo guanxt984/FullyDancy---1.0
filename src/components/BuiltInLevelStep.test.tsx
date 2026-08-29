@@ -7,6 +7,11 @@ const level: BuiltInLevel = {
   id: "level-1",
   title: "8月3日舞蹈挑战",
   videoUrl: "/levels/level-1.mp4",
+  durationSec: 13,
+  poseCache: [{
+    captureTimeSec: 0,
+    landmarks: Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 1 })),
+  }],
 };
 
 describe("BuiltInLevelStep", () => {

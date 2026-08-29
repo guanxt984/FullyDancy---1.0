@@ -74,9 +74,9 @@ function collectTransportRules(source: string): CssRuleContract[] {
   return rules;
 }
 
-const level: BuiltInLevel = { id: "level-1", title: "8月3日舞蹈挑战", videoUrl: "/levels/level-1.mp4", durationSec: 13 };
 const chart: BeatPoint[] = [{ id: "beat-1", beatIndex: 1, timeSec: 0.68, salience: 1, enabled: true, action: "rhythm" }];
 const poseCache: DemoPoseCache = [{ captureTimeSec: 0, landmarks: Array.from({ length: 33 }, (_, index) => ({ x: 0.35 + (index % 4) * 0.08, y: 0.18 + Math.floor(index / 4) * 0.07, z: 0, visibility: 0.95 })) }];
+const level: BuiltInLevel = { id: "level-1", title: "8月3日舞蹈挑战", videoUrl: "/levels/level-1.mp4", durationSec: 13, poseCache };
 const providerFactory = () => ({ start: vi.fn(async () => undefined), detect: vi.fn(() => null), stop: vi.fn() });
 const poseLoop = vi.fn(() => vi.fn());
 
